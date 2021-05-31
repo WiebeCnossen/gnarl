@@ -40,7 +40,7 @@ func parseRequestTerm(term string) (RequestTerm, error) {
 	for _, part := range strings.Split(source, " ") {
 		var constraint Constraint
 		switch {
-		case part == "*":
+		case part == "*" || part == "latest":
 			factors = append(factors, RequestFactor{Constraint: Any})
 			continue
 		case strings.HasPrefix(part, "^"):
@@ -49,10 +49,14 @@ func parseRequestTerm(term string) (RequestTerm, error) {
 			constraint, part = MatchMinor, part[1:]
 		case strings.HasPrefix(part, ">="):
 			constraint, part = AtLeast, part[2:]
+		case strings.HasPrefix(part, "<="):
+			constraint, part = AtMost, part[2:]
 		case strings.HasPrefix(part, "<"):
 			constraint, part = Less, part[1:]
 		case strings.HasPrefix(part, ">"):
 			constraint, part = Greater, part[1:]
+		case strings.HasPrefix(part, "="):
+			constraint, part = Exact, part[1:]
 		default:
 			if _, err := strconv.ParseInt(source, 10, 0); err == nil {
 				constraint = MatchMajor
@@ -61,8 +65,12 @@ func parseRequestTerm(term string) (RequestTerm, error) {
 			}
 		}
 
-		if strings.Contains(part, ".x") {
-			constraint, part = MatchMajor, strings.ReplaceAll(part, ".x", ".0")
+		if minorMatch := regexp.MustCompile(`^(\d+)\.[x*]`).FindStringSubmatch(part); minorMatch != nil {
+			constraint, part = MatchMajor, fmt.Sprintf("%s.0.0", minorMatch[1])
+		}
+
+		if patchMatch := regexp.MustCompile(`^(\d+)\.(\d+)\.[x*]`).FindStringSubmatch(part); patchMatch != nil {
+			constraint, part = MatchMinor, fmt.Sprintf("%s.%s.0", patchMatch[1], patchMatch[2])
 		}
 
 		version, err := ParseVersion(part)
@@ -115,6 +123,9 @@ func (r *RequestFactor) Matches(version *Version) bool {
 	case AtLeast:
 		return (r.Major < version.Major || r.Major == version.Major &&
 			(r.Minor < version.Minor || r.Minor == version.Minor && r.Patch <= version.Patch)) && matchPre(false)
+	case AtMost:
+		return (r.Major > version.Major || r.Major == version.Major &&
+			(r.Minor > version.Minor || r.Minor == version.Minor && r.Patch >= version.Patch)) && matchPre(false)
 	case Greater:
 		return (r.Major < version.Major || r.Major == version.Major &&
 			(r.Minor < version.Minor || r.Minor == version.Minor && r.Patch < version.Patch)) && matchPre(false)
@@ -178,6 +189,7 @@ const (
 	MatchMinor
 	MatchMajor
 	AtLeast
+	AtMost
 	Less
 	Greater
 	Any

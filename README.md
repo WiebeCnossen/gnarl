@@ -39,3 +39,9 @@ Joins package version resolutions, removing old versions where possible.
 ```
 gnarl shrink
 ```
+
+# Compilation
+
+```
+go build
+```

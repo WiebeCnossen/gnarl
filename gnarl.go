@@ -24,7 +24,7 @@ func mustSaveLock(lock *yarn.Lock) {
 	}
 }
 
-const version string = "1.0.0-beta-1"
+const version string = "1.0.0-beta-2"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2 companion tool", version)
