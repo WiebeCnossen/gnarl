@@ -37,9 +37,15 @@ func parseRequestTerm(term string) (RequestTerm, error) {
 	source = regexp.MustCompile(`\s+`).ReplaceAllString(source, " ")
 
 	var factors []RequestFactor
-	for _, part := range strings.Split(source, " ") {
+	var sawHyphen bool
+	parts := strings.Split(source, " ")
+	for i, part := range parts {
 		var constraint Constraint
 		switch {
+		case part == "-" && i > 0 && factors[i-1].Constraint == Exact && i+1 < len(parts):
+			factors[i-1].Constraint = AtLeast
+			sawHyphen = true
+			continue
 		case part == "*" || part == "latest":
 			factors = append(factors, RequestFactor{Constraint: Any})
 			continue
@@ -63,6 +69,14 @@ func parseRequestTerm(term string) (RequestTerm, error) {
 			} else {
 				constraint = Exact
 			}
+		}
+
+		switch {
+		case sawHyphen && constraint != Exact:
+			return nil, fmt.Errorf("cannot apply range to %s", part)
+		case sawHyphen:
+			constraint = AtMost
+			sawHyphen = false
 		}
 
 		if minorMatch := regexp.MustCompile(`^(\d+)\.[x*]`).FindStringSubmatch(part); minorMatch != nil {
