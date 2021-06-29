@@ -78,7 +78,7 @@ func (lock *Lock) Fix(npmPackage string, safeVersions *semver.Request) {
 			continue
 		}
 
-		requested := key[strings.LastIndex(key, ":")+1:]
+		requested := requestFromKey(key)
 		request := semver.MustParseRequest(requested)
 		overlaps, closest := request.Overlaps(safeVersions)
 		switch {
@@ -140,6 +140,15 @@ func (lock *Lock) read(npmPackage string) (map[string]Resolution, map[string]Res
 	return resolutions, versions
 }
 
+func requestFromKey(key string) string {
+	afterColon := key[strings.LastIndex(key, ":")+1:]
+	if loc := strings.LastIndex(afterColon, "%3A"); loc >= 0 {
+		return afterColon[strings.LastIndex(afterColon, "%3A")+3:]
+	} else {
+		return afterColon
+	}
+}
+
 func (lock *Lock) shrink(npmPackage string) {
 	resolutions, versions := lock.read(npmPackage)
 
@@ -153,7 +162,7 @@ func (lock *Lock) shrink(npmPackage string) {
 	}
 
 	for key, value := range resolutions {
-		requested := key[strings.LastIndex(key, ":")+1:]
+		requested := requestFromKey(key)
 
 		if strings.HasPrefix(requested, npmPackage+"@") {
 			requested = requested[len(npmPackage)+1:]
