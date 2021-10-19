@@ -192,6 +192,7 @@ func (lock *Lock) shrink(npmPackage string) {
 		}
 
 		if len(keys) == 0 {
+			dirty = true
 			log.Printf("Drop %s %s", npmPackage, resolution.Version)
 			continue
 		}
@@ -199,7 +200,10 @@ func (lock *Lock) shrink(npmPackage string) {
 		sort.Slice(keys, func(p, q int) bool { return keys[p] < keys[q] })
 		keyCsv := strings.Join(keys, ", ")
 		next[keyCsv] = resolution
-		dirty = dirty || lock.resolutions[keyCsv].Version != resolution.Version
+		if lock.resolutions[keyCsv].Version != resolution.Version {
+			dirty = true
+			log.Printf("Save %s %s", npmPackage, resolution.Version)
+		}
 	}
 
 	if dirty {
@@ -212,7 +216,7 @@ func (lock *Lock) shrink(npmPackage string) {
 
 func (lock *Lock) Save(directory string) error {
 	if !lock.dirty {
-		log.Printf("Skip saving: yarn.lock clean")
+		log.Printf("yarn.lock stable")
 		return nil
 	}
 
@@ -221,6 +225,6 @@ func (lock *Lock) Save(directory string) error {
 		return fmt.Errorf("cannot serialize yarn.lock: %v", err)
 	}
 
-	log.Printf("Saving yarn.lock, please run yarn")
+	log.Printf("yarn.lock dirty, please run yarn")
 	return ioutil.WriteFile(yarnLock(directory), yaml, fs.ModePerm)
 }

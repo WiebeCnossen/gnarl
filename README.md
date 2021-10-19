@@ -1,6 +1,6 @@
 # About
 
-**gnarl** - the yarn v2 companion tool.
+**gnarl** - the yarn v2/v3 companion tool.
 
 # Usage
 
