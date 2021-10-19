@@ -16,6 +16,7 @@ import (
 type Lock struct {
 	dirty       bool
 	resolutions map[string]Resolution
+	suggestions map[string]*semver.Version
 }
 
 type Resolution struct {
@@ -53,7 +54,7 @@ func ReadLock(directory string) (*Lock, error) {
 		return nil, fmt.Errorf("cannot read yarn.lock: %v", err)
 	}
 
-	lock := Lock{resolutions: map[string]Resolution{}}
+	lock := Lock{resolutions: map[string]Resolution{}, suggestions: map[string]*semver.Version{}}
 	err = yaml2.Unmarshal(yaml, lock.resolutions)
 	if err != nil {
 		return nil, fmt.Errorf("cannot deserialize yarn.lock: %v", err)
@@ -81,13 +82,17 @@ func (lock *Lock) Fix(npmPackage string, safeVersions *semver.Request) {
 		requested := requestFromKey(key)
 		request := semver.MustParseRequest(requested)
 		overlaps, closest := request.Overlaps(safeVersions)
+		npmPackageRequest := fmt.Sprintf("%s@%s", npmPackage, requested)
 		switch {
 		case overlaps:
 			needsReset = true
 		case closest == nil:
-			log.Printf(`No fix for %s:%s`, npmPackage, requested)
+			log.Printf(`No fix for %s`, npmPackageRequest)
+		case lock.suggestions[npmPackageRequest] == nil:
+			lock.suggestions[npmPackageRequest] = closest
+		case lock.suggestions[npmPackageRequest].AtLeast().Matches(closest):
+			lock.suggestions[npmPackageRequest] = closest
 		default:
-			log.Printf(`Suggested resolution: "%s@%s": "^%s"`, npmPackage, requested, closest.String())
 		}
 	}
 
@@ -218,7 +223,29 @@ func (lock *Lock) shrink(npmPackage string) {
 	}
 }
 
+func (lock *Lock) printSuggestions() {
+	if len(lock.suggestions) == 0 {
+		return
+	}
+
+	var keys []string
+
+	for key := range lock.suggestions {
+		keys = append(keys, key)
+	}
+
+	sort.Slice(keys, func(p, q int) bool { return keys[p] < keys[q] })
+
+	log.Printf("Suggested resolutions")
+
+	for _, key := range keys {
+		fmt.Printf("    \"%s\": \"^%s\",\n", key, lock.suggestions[key].String())
+	}
+}
+
 func (lock *Lock) Save(directory string) (bool, error) {
+	lock.printSuggestions()
+
 	if !lock.dirty {
 		log.Printf("yarn.lock stable")
 		return false, nil
