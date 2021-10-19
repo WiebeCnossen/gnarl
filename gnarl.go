@@ -98,6 +98,7 @@ func main() {
 
 		lock = mustReadLock()
 		lock.Fix(npmPackage, request)
+		lock.Shrink()
 		mustSaveLock(lock)
 	case "help":
 		help()
