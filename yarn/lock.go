@@ -69,7 +69,7 @@ func ReadLock(directory string) (*Lock, error) {
 func (lock *Lock) Fix(npmPackage string, safeVersions *semver.Request) {
 	resolutions, _ := lock.read(npmPackage)
 	if len(resolutions) == 0 {
-		log.Fatalf("Package %s not present", npmPackage)
+		return
 	}
 
 	var needsReset bool
@@ -103,6 +103,10 @@ func (lock *Lock) Reset(npmPackage string) {
 		if strings.HasPrefix(key, npmPackage) && key[len(npmPackage)] == '@' {
 			keys = append(keys, key)
 		}
+	}
+
+	if len(keys) > 0 {
+		log.Printf("Reset %s", npmPackage)
 	}
 
 	for _, key := range keys {
@@ -214,17 +218,17 @@ func (lock *Lock) shrink(npmPackage string) {
 	}
 }
 
-func (lock *Lock) Save(directory string) error {
+func (lock *Lock) Save(directory string) (bool, error) {
 	if !lock.dirty {
 		log.Printf("yarn.lock stable")
-		return nil
+		return false, nil
 	}
 
 	yaml, err := yaml2.Marshal(lock.resolutions)
 	if err != nil {
-		return fmt.Errorf("cannot serialize yarn.lock: %v", err)
+		return true, fmt.Errorf("cannot serialize yarn.lock: %v", err)
 	}
 
-	log.Printf("yarn.lock dirty, please run yarn")
-	return ioutil.WriteFile(yarnLock(directory), yaml, fs.ModePerm)
+	log.Printf("yarn.lock dirty, needs `yarn install`")
+	return true, ioutil.WriteFile(yarnLock(directory), yaml, fs.ModePerm)
 }
