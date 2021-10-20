@@ -27,12 +27,12 @@ func mustSaveLock(lock *yarn.Lock) bool {
 	return dirty
 }
 
-const version string = "1.0.0-beta-5"
+const version string = "1.0.0-beta-6"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2/v3 companion tool", version)
-	log.Print("Usage: gnarl <fix | help | reset | shrink> <args>")
-	log.Print("> gnarl auto")
+	log.Print("Usage: gnarl [<auto | fix | help | reset | shrink> <args>]")
+	log.Print("> gnarl [auto]")
 	log.Print("> gnarl fix package-name safe-version-request")
 	log.Print("> gnarl help")
 	log.Print("> gnarl reset package-names...")
@@ -44,8 +44,7 @@ func main() {
 	if len(os.Args) > 1 {
 		verb = os.Args[1]
 	} else {
-		help()
-		log.Fatal("No verb specified")
+		verb = "auto"
 	}
 
 	var lock *yarn.Lock
