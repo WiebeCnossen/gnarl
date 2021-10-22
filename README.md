@@ -5,7 +5,21 @@
 # Usage
 
 ```
-gnarl <fix | help | reset | shrink> <args>
+gnarl [<auto | fix | help | reset | shrink> <args>]
+```
+
+## Auto
+
+This is the default operation. It will do
+
+1. `yarn install`
+2. `yarn npm audit --recursive`
+3. `gnarl fix` for each of the results
+4. `gnarl shrink`
+5. restart from 1 if `yarn.lock` was modified in this iteration
+
+```
+gnarl [auto]
 ```
 
 ## Fix
