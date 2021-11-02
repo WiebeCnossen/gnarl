@@ -27,7 +27,7 @@ func mustSaveLock(lock *yarn.Lock) bool {
 	return dirty
 }
 
-const version string = "1.0.0-beta-6"
+const version string = "1.0.0-beta-7"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2/v3 companion tool", version)
@@ -78,6 +78,8 @@ func main() {
 
 				lock.Fix(advisory.ModuleName, request)
 			}
+
+			lock.Shrink()
 
 			if !mustSaveLock(lock) {
 				break
