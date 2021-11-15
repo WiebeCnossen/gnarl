@@ -27,22 +27,29 @@ func mustSaveLock(lock *yarn.Lock) bool {
 	return dirty
 }
 
-const version string = "1.0.0-beta-7"
+const version string = "1.0.0-beta-8"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2/v3 companion tool", version)
-	log.Print("Usage: gnarl [<auto | fix | help | reset | shrink> <args>]")
-	log.Print("> gnarl [auto]")
+	log.Print("Usage: gnarl [<auto | fix | help | reset> <args>]")
+	log.Print("> gnarl [auto] [reset-package-names...]")
 	log.Print("> gnarl fix package-name safe-version-request")
 	log.Print("> gnarl help")
 	log.Print("> gnarl reset package-names...")
-	log.Print("> gnarl shrink")
 }
 
 func main() {
 	var verb string
 	if len(os.Args) > 1 {
-		verb = os.Args[1]
+		switch os.Args[1] {
+		case "deprecated-shrink":
+		case "fix":
+		case "help":
+		case "reset":
+			verb = os.Args[1]
+		default:
+			verb = "auto"
+		}
 	} else {
 		verb = "auto"
 	}
@@ -50,9 +57,16 @@ func main() {
 	var lock *yarn.Lock
 	switch verb {
 	case "auto":
+		first := true
 		for {
 			log.Print("yarn install")
 			_, err := exec.Command("yarn", "install").Output()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			log.Print("yarn dedupe")
+			_, err = exec.Command("yarn", "dedupe").Output()
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -70,6 +84,13 @@ func main() {
 
 			lock = mustReadLock()
 
+			if first {
+				first = false
+				for _, arg := range os.Args {
+					lock.Reset(arg)
+				}
+			}
+
 			for _, advisory := range advisories {
 				request, err := semver.ParseRequest(advisory.PatchedVersions)
 				if err != nil {
@@ -79,12 +100,14 @@ func main() {
 				lock.Fix(advisory.ModuleName, request)
 			}
 
-			lock.Shrink()
-
 			if !mustSaveLock(lock) {
 				break
 			}
 		}
+	case "deprecated-shrink":
+		lock = mustReadLock()
+		lock.Shrink()
+		mustSaveLock(lock)
 	case "fix":
 		if len(os.Args) < 4 {
 			help()
@@ -99,27 +122,18 @@ func main() {
 
 		lock = mustReadLock()
 		lock.Fix(npmPackage, request)
-		lock.Shrink()
 		mustSaveLock(lock)
 	case "help":
 		help()
 	case "reset":
 		lock = mustReadLock()
 
-		for i, arg := range os.Args {
-			if i > 1 {
-				lock.Reset(arg)
-			}
+		for _, arg := range os.Args[1:] {
+			lock.Reset(arg)
 		}
 
 		mustSaveLock(lock)
-	case "shrink":
-		lock = mustReadLock()
-		lock.Shrink()
-		mustSaveLock(lock)
 	default:
-		help()
-		log.Fatalf("Unknown verb %s", verb)
+		log.Fatalf("Unreachable verb %s", verb)
 	}
-
 }
