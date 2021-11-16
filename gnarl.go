@@ -9,6 +9,15 @@ import (
 	"strings"
 )
 
+func mustReadPackage() *yarn.Package {
+	lock, err := yarn.ReadPackage(".")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return lock
+}
+
 func mustReadLock() *yarn.Lock {
 	lock, err := yarn.ReadLock(".")
 	if err != nil {
@@ -27,7 +36,7 @@ func mustSaveLock(lock *yarn.Lock) bool {
 	return dirty
 }
 
-const version string = "1.0.0-beta-8"
+const version string = "1.0.0-beta-9"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2/v3 companion tool", version)
@@ -55,6 +64,7 @@ func main() {
 	}
 
 	var lock *yarn.Lock
+	project := mustReadPackage()
 	switch verb {
 	case "auto":
 		first := true
@@ -98,6 +108,26 @@ func main() {
 				}
 
 				lock.Fix(advisory.ModuleName, request)
+			}
+
+			for key, r := range project.Resolutions {
+				parts := strings.Split(key, "@")
+				npmPackage := parts[0]
+				var request *semver.Request
+				switch len(parts) {
+				case 1:
+					if _, err := semver.ParseRequest(r); err == nil {
+						log.Printf("Unrestricted resolution for %s", npmPackage)
+					}
+
+					request = semver.MustParseRequest("*")
+				default:
+					request = semver.MustParseRequest(parts[1])
+				}
+
+				if !lock.Has(npmPackage, request) {
+					log.Printf("Superfluous resolution for %s", key)
+				}
 			}
 
 			if !mustSaveLock(lock) {
