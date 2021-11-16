@@ -113,16 +113,14 @@ func main() {
 			for key, r := range project.Resolutions {
 				parts := strings.Split(key, "@")
 				npmPackage := parts[0]
-				var request *semver.Request
+				request := "*"
 				switch len(parts) {
 				case 1:
-					if _, err := semver.ParseRequest(r); err == nil {
+					if v, err := semver.ParseRequest(r); err == nil && !v.IsExact() {
 						log.Printf("Unrestricted resolution for %s", npmPackage)
 					}
-
-					request = semver.MustParseRequest("*")
 				default:
-					request = semver.MustParseRequest(parts[1])
+					request = parts[1]
 				}
 
 				if !lock.Has(npmPackage, request) {

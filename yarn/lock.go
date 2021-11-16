@@ -67,20 +67,14 @@ func ReadLock(directory string) (*Lock, error) {
 	return &lock, nil
 }
 
-func (lock *Lock) Has(npmPackage string, request *semver.Request) bool {
+func (lock *Lock) Has(npmPackage string, request string) bool {
 	for _, resolution := range lock.resolutions {
 		for key, value := range resolution.Dependencies {
 			if key != npmPackage {
 				continue
 			}
-			b, err := semver.ParseRequest(value)
-			if err != nil {
-				log.Printf("%s", err)
-				continue
-			}
 
-			overlaps, _ := request.Overlaps(b)
-			if overlaps {
+			if request == "*" || request == value {
 				return true
 			}
 		}

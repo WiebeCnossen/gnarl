@@ -121,6 +121,10 @@ terms:
 	return false
 }
 
+func (r *Request) IsExact() bool {
+	return len(r.terms) == 1 && len(r.terms[0]) == 1 && r.terms[0][0].Constraint == Exact
+}
+
 func (r *RequestFactor) Matches(version *Version) bool {
 	matchPre := func(strict bool) bool {
 		return r.Pre == version.Pre || !strict && version.Pre == ""
