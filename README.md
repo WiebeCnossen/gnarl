@@ -5,7 +5,7 @@
 # Usage
 
 ```
-gnarl [<auto | fix | help | reset | shrink> <args>]
+gnarl [<auto | audit | fix | help | reset | shrink> <args>]
 ```
 
 ## Auto
@@ -13,13 +13,23 @@ gnarl [<auto | fix | help | reset | shrink> <args>]
 This is the default operation. It will do
 
 1. `yarn install`
-2. `yarn npm audit --recursive`
-3. `gnarl fix` for each of the results
-4. `gnarl shrink`
-5. restart from 1 if `yarn.lock` was modified in this iteration
+2. `yarn dedupe`
+3. `gnarl audit`
+4. restart from 1 if `yarn.lock` was modified in this iteration
 
 ```
 gnarl [auto]
+```
+
+## Audit
+
+Runs an npm audit,
+does `gnarl reset` for issues with a safe fix,
+reports remaining issues with suggested resolutions and
+checks whether all current resolution are still in use.
+
+```
+gnarl audit
 ```
 
 ## Fix
@@ -48,7 +58,10 @@ gnarl reset package-names...
 
 ## Shrink
 
+**DEPRECATED**
+
 Joins package version resolutions, removing old versions where possible.
+More aggressive and less reliable than `yarn dedupe`.
 
 ```
 gnarl shrink
