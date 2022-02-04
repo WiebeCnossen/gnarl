@@ -36,7 +36,7 @@ func mustSaveLock(lock *yarn.Lock) bool {
 	return dirty
 }
 
-const version string = "1.0.0-rc-1"
+const version string = "1.0.0-rc-2"
 
 func help() {
 	log.Printf("gnarl %s - the yarn v2/v3 companion tool", version)
@@ -68,7 +68,10 @@ func main() {
 		verb = "auto"
 	}
 
-	project := mustReadPackage()
+	var project *yarn.Package
+	if verb != "help" {
+		project = mustReadPackage()
+	}
 
 	switch verb {
 	case "auto":
