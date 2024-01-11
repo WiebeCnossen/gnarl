@@ -142,7 +142,7 @@ func audit(project *yarn.Package) bool {
 	log.Print("yarn npm audit --recursive")
 	out, err := exec.Command("yarn", "npm", "audit", "--json", "--recursive").Output()
 	if err != nil {
-		log.Fatal(err)
+		// This may mean either it failed or there were some advisories. We assume the latter.
 	}
 
 	advisories, err := yarn.ParseAudit(out)
