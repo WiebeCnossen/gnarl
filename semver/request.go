@@ -121,6 +121,24 @@ terms:
 	return false
 }
 
+func (r *Request) Patches() *Request {
+	var patches []RequestTerm
+
+	for _, term := range r.terms {
+		for _, factor := range term {
+			if factor.Constraint == Less {
+				patches = append(patches, RequestTerm{RequestFactor{Constraint: MatchMajor, Version: factor.Version}})
+			}
+		}
+	}
+
+	if len(patches) == 0 {
+		patches = append(patches, RequestTerm{RequestFactor{Constraint: Less, Version: Version{}}})
+	}
+
+	return &Request{terms: patches}
+}
+
 func (r *Request) IsExact() bool {
 	return len(r.terms) == 1 && len(r.terms[0]) == 1 && r.terms[0][0].Constraint == Exact
 }
@@ -212,3 +230,48 @@ const (
 	Greater
 	Any
 )
+
+func (t *RequestFactor) String() string {
+	var operator string
+	switch t.Constraint {
+	case Exact:
+		operator = "="
+	case MatchMinor:
+		operator = "~"
+	case MatchMajor:
+		operator = "^"
+	case AtLeast:
+		operator = ">="
+	case AtMost:
+		operator = "<="
+	case Less:
+		operator = "<"
+	case Greater:
+		operator = ">"
+	case Any:
+		operator = "*"
+	default:
+		operator = "?"
+	}
+	return fmt.Sprintf("%s%s", operator, t.Version.String())
+}
+
+func (t *RequestTerm) String() string {
+	var parts []string
+
+	for _, factor := range *t {
+		parts = append(parts, factor.String())
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func (r *Request) String() string {
+	var parts []string
+
+	for _, term := range r.terms {
+		parts = append(parts, term.String())
+	}
+
+	return strings.Join(parts, " || ")
+}

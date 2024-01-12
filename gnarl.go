@@ -139,13 +139,20 @@ func main() {
 }
 
 func audit(project *yarn.Package) bool {
-	log.Print("yarn npm audit --recursive")
-	out, err := exec.Command("yarn", "npm", "audit", "--json", "--recursive").Output()
+	out, err := exec.Command("yarn", "--version").Output()
 	if err != nil {
-		// This may mean either it failed or there were some advisories. We assume the latter.
+		log.Fatal(err)
 	}
 
-	advisories, err := yarn.ParseAudit(out)
+	version := semver.MustParseVersion(string(out))
+
+	log.Print("yarn npm audit --recursive")
+	out, err = exec.Command("yarn", "npm", "audit", "--json", "--recursive").Output()
+	if err != nil && version.Major < 4 {
+		log.Fatal(err)
+	}
+
+	advisories, err := yarn.ParseAudit(out, version)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -165,7 +172,9 @@ func audit(project *yarn.Package) bool {
 		log.Print("all packages considered safe")
 	}
 
-	check(project, lock)
+	if version.Major < 4 {
+		check(project, lock)
+	}
 
 	return mustSaveLock(lock)
 }
