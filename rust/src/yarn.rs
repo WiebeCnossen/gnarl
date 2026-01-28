@@ -64,9 +64,9 @@ pub struct Advisory {
 impl Package {
     pub fn read(directory: &str) -> Result<Self, String> {
         let path = Path::new(directory).join("package.json");
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("cannot open package.json: {}", e))?;
-        
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("cannot open package.json: {}", e))?;
+
         serde_json::from_str(&content)
             .map_err(|e| format!("cannot deserialize package.json: {}", e))
     }
@@ -75,12 +75,12 @@ impl Package {
 impl Lock {
     pub fn read(directory: &str) -> Result<Self, String> {
         let path = Path::new(directory).join("yarn.lock");
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("cannot open yarn.lock: {}", e))?;
-        
+        let content =
+            fs::read_to_string(&path).map_err(|e| format!("cannot open yarn.lock: {}", e))?;
+
         let resolutions: HashMap<String, Resolution> = serde_yaml::from_str(&content)
             .map_err(|e| format!("cannot deserialize yarn.lock: {}", e))?;
-        
+
         if resolutions.is_empty() {
             return Err("no entries found in yarn.lock".to_string());
         }
@@ -117,26 +117,24 @@ impl Lock {
         let mut needs_reset = false;
         for (key, resolution) in &resolutions {
             if let Some(ref version_str) = resolution.version {
-                let version = semver::Version::parse(version_str)
-                    .unwrap_or_else(|_| {
-                        eprintln!("Error parsing version: {}", version_str);
-                        std::process::exit(1);
-                    });
-                
+                let version = semver::Version::parse(version_str).unwrap_or_else(|_| {
+                    eprintln!("Error parsing version: {}", version_str);
+                    std::process::exit(1);
+                });
+
                 if safe_versions.matches(&version) {
                     continue;
                 }
 
                 let requested = request_from_key(key);
-                let request = semver::Request::parse(&requested)
-                    .unwrap_or_else(|_| {
-                        eprintln!("Error parsing request: {}", requested);
-                        std::process::exit(1);
-                    });
-                
+                let request = semver::Request::parse(&requested).unwrap_or_else(|_| {
+                    eprintln!("Error parsing request: {}", requested);
+                    std::process::exit(1);
+                });
+
                 let npm_package_request = format!("{}@{}", npm_package, requested);
                 let (overlaps, closest) = request.overlaps(safe_versions);
-                
+
                 match (overlaps, closest) {
                     (true, _) => {
                         needs_reset = true;
@@ -147,10 +145,12 @@ impl Lock {
                     (false, Some(ref closest_version)) => {
                         if let Some(existing) = self.suggestions.get(&npm_package_request) {
                             if closest_version.at_least().matches(existing) {
-                                self.suggestions.insert(npm_package_request, closest_version.clone());
+                                self.suggestions
+                                    .insert(npm_package_request, closest_version.clone());
                             }
                         } else {
-                            self.suggestions.insert(npm_package_request, closest_version.clone());
+                            self.suggestions
+                                .insert(npm_package_request, closest_version.clone());
                         }
                     }
                 }
@@ -183,7 +183,7 @@ impl Lock {
 
     pub fn shrink(&mut self) {
         let mut npm_packages: HashMap<String, i32> = HashMap::new();
-        
+
         for key in self.resolutions.keys() {
             if let Some(pos) = key[1..].find('@') {
                 let npm_package = &key[..=pos];
@@ -198,7 +198,10 @@ impl Lock {
         }
     }
 
-    fn read_package(&self, npm_package: &str) -> (HashMap<String, Resolution>, HashMap<String, Resolution>) {
+    fn read_package(
+        &self,
+        npm_package: &str,
+    ) -> (HashMap<String, Resolution>, HashMap<String, Resolution>) {
         let mut resolutions = HashMap::new();
         let mut versions = HashMap::new();
 
@@ -228,12 +231,11 @@ impl Lock {
                 &requested
             };
 
-            let request = semver::Request::parse(requested)
-                .unwrap_or_else(|_| {
-                    eprintln!("Error parsing request: {}", requested);
-                    std::process::exit(1);
-                });
-            
+            let request = semver::Request::parse(requested).unwrap_or_else(|_| {
+                eprintln!("Error parsing request: {}", requested);
+                std::process::exit(1);
+            });
+
             let version = if let Some(ref v) = value.version {
                 semver::Version::parse(v).unwrap_or_else(|_| {
                     eprintln!("Error parsing version: {}", v);
@@ -245,27 +247,26 @@ impl Lock {
 
             let mut best_version = version.clone();
             for present_source in versions.keys() {
-                let present = semver::Version::parse(present_source)
-                    .unwrap_or_else(|_| {
-                        eprintln!("Error parsing version: {}", present_source);
-                        std::process::exit(1);
-                    });
-                
+                let present = semver::Version::parse(present_source).unwrap_or_else(|_| {
+                    eprintln!("Error parsing version: {}", present_source);
+                    std::process::exit(1);
+                });
+
                 if version.at_least().matches(&present) && request.matches(&present) {
                     best_version = present;
                 }
             }
 
-            if value.version.as_deref() != Some(best_version.to_string().as_str()) {
-                if let Some(new_resolution) = versions.get(&best_version.to_string()) {
-                    updated_resolutions.insert(key.clone(), new_resolution.clone());
-                }
+            if value.version.as_deref() != Some(best_version.to_string().as_str())
+                && let Some(new_resolution) = versions.get(&best_version.to_string())
+            {
+                updated_resolutions.insert(key.clone(), new_resolution.clone());
             }
         }
 
         let mut next = HashMap::new();
         let mut dirty = false;
-        
+
         for (version, resolution) in &versions {
             let mut keys: Vec<String> = Vec::new();
             for (key, res) in &updated_resolutions {
@@ -283,7 +284,7 @@ impl Lock {
             keys.sort();
             let key_csv = keys.join(", ");
             next.insert(key_csv.clone(), resolution.clone());
-            
+
             if let Some(existing) = self.resolutions.get(&key_csv) {
                 if existing.version != resolution.version {
                     dirty = true;
@@ -332,8 +333,7 @@ impl Lock {
 
         println!("yarn.lock dirty, needs `yarn install`");
         let path = Path::new(directory).join("yarn.lock");
-        fs::write(&path, yaml)
-            .map_err(|e| format!("cannot write yarn.lock: {}", e))?;
+        fs::write(&path, yaml).map_err(|e| format!("cannot write yarn.lock: {}", e))?;
 
         Ok(true)
     }
@@ -375,12 +375,15 @@ struct Yarn4AdvisoryChildren {
 
 impl Yarn4Advisory {
     fn to_advisory(&self) -> Advisory {
-        let request = semver::Request::parse(&self.children.vulnerable_versions)
-            .unwrap_or_else(|_| {
-                eprintln!("Error parsing vulnerable versions: {}", self.children.vulnerable_versions);
+        let request =
+            semver::Request::parse(&self.children.vulnerable_versions).unwrap_or_else(|_| {
+                eprintln!(
+                    "Error parsing vulnerable versions: {}",
+                    self.children.vulnerable_versions
+                );
                 std::process::exit(1);
             });
-        
+
         Advisory {
             module_name: self.module_name.clone(),
             patched_versions: request.patches().to_string(),
@@ -406,20 +409,20 @@ fn parse_audit_yarn2(output: &[u8]) -> Result<Vec<Advisory>, String> {
 fn parse_audit_yarn4(output: &[u8]) -> Result<Vec<Advisory>, String> {
     let mut advisories = Vec::new();
     let reader = BufReader::new(Cursor::new(output));
-    
+
     for line in reader.lines() {
         let line = line.map_err(|e| format!("cannot read line: {}", e))?;
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        
+
         match serde_json::from_str::<Yarn4Advisory>(line) {
             Ok(issue) => {
-                if let serde_json::Value::String(id) = &issue.children.id {
-                    if id.contains(" (deprecation)") {
-                        continue;
-                    }
+                if let serde_json::Value::String(id) = &issue.children.id
+                    && id.contains(" (deprecation)")
+                {
+                    continue;
                 }
                 advisories.push(issue.to_advisory());
             }

@@ -3,7 +3,7 @@ mod yarn;
 
 use std::env;
 use std::process::{Command, exit};
-use yarn::{Package, Lock};
+use yarn::{Lock, Package};
 
 const VERSION: &str = "1.0.0-rc-2";
 
@@ -108,16 +108,16 @@ fn audit(project: &Package) -> bool {
 
 fn check(project: &Package, lock: &Lock) {
     let mut dirty = false;
-    
+
     for (key, r) in &project.resolutions {
         let parts: Vec<&str> = key.split('@').collect();
         let npm_package = parts[0];
         let request = if parts.len() == 1 {
-            if let Ok(v) = semver::Request::parse(r) {
-                if !v.is_exact() {
-                    dirty = true;
-                    println!("unrestricted resolution for {}", npm_package);
-                }
+            if let Ok(v) = semver::Request::parse(r)
+                && !v.is_exact()
+            {
+                dirty = true;
+                println!("unrestricted resolution for {}", npm_package);
             }
             "*"
         } else {
@@ -137,7 +137,7 @@ fn check(project: &Package, lock: &Lock) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    
+
     let verb = if args.len() > 1 {
         match args[1].as_str() {
             "audit" | "check" | "fix" | "help" | "reset" | "shrink" => args[1].as_str(),
@@ -157,31 +157,29 @@ fn main() {
     };
 
     match verb {
-        "auto" => {
-            loop {
-                println!("yarn install");
-                Command::new("yarn")
-                    .arg("install")
-                    .output()
-                    .unwrap_or_else(|e| {
-                        eprintln!("Error running yarn install: {}", e);
-                        exit(1);
-                    });
+        "auto" => loop {
+            println!("yarn install");
+            Command::new("yarn")
+                .arg("install")
+                .output()
+                .unwrap_or_else(|e| {
+                    eprintln!("Error running yarn install: {}", e);
+                    exit(1);
+                });
 
-                println!("yarn dedupe");
-                Command::new("yarn")
-                    .arg("dedupe")
-                    .output()
-                    .unwrap_or_else(|e| {
-                        eprintln!("Error running yarn dedupe: {}", e);
-                        exit(1);
-                    });
+            println!("yarn dedupe");
+            Command::new("yarn")
+                .arg("dedupe")
+                .output()
+                .unwrap_or_else(|e| {
+                    eprintln!("Error running yarn dedupe: {}", e);
+                    exit(1);
+                });
 
-                if !audit(project.as_ref().unwrap()) {
-                    break;
-                }
+            if !audit(project.as_ref().unwrap()) {
+                break;
             }
-        }
+        },
         "audit" => {
             audit(project.as_ref().unwrap());
         }
