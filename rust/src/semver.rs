@@ -165,22 +165,22 @@ impl Request {
     }
 
     pub fn overlaps(&self, other: &Request) -> (bool, Option<Version>) {
-        let from_versions = other.from_versions();
+        let versions = other.as_versions();
 
-        for version in &from_versions {
+        for version in &versions {
             if self.matches(version) {
                 return (true, None);
             }
         }
 
-        if from_versions.is_empty() {
+        if versions.is_empty() {
             return (false, None);
         }
 
-        (false, Some(from_versions[0].clone()))
+        (false, Some(versions[0].clone()))
     }
 
-    fn from_versions(&self) -> Vec<Version> {
+    fn as_versions(&self) -> Vec<Version> {
         let mut versions = Vec::new();
 
         for term in &self.terms {
@@ -305,6 +305,8 @@ fn parse_request_term(term: &str) -> Result<RequestTerm, String> {
     let mut source = re1.replace_all(term, "$1").to_string();
     let re2 = Regex::new(r"\s+").unwrap();
     source = re2.replace_all(&source, " ").to_string();
+    let minor_match = Regex::new(r"^(\d+)\.[x*]").unwrap();
+    let patch_match = Regex::new(r"^(\d+)\.(\d+)\.[x*]").unwrap();
 
     let mut factors: Vec<RequestFactor> = Vec::new();
     let mut saw_hyphen = false;
@@ -332,20 +334,20 @@ fn parse_request_term(term: &str) -> Result<RequestTerm, String> {
                 },
             });
             continue;
-        } else if part.starts_with('^') {
-            (Constraint::MatchMajor, &part[1..])
-        } else if part.starts_with('~') {
-            (Constraint::MatchMinor, &part[1..])
-        } else if part.starts_with(">=") {
-            (Constraint::AtLeast, &part[2..])
-        } else if part.starts_with("<=") {
-            (Constraint::AtMost, &part[2..])
-        } else if part.starts_with('<') {
-            (Constraint::Less, &part[1..])
-        } else if part.starts_with('>') {
-            (Constraint::Greater, &part[1..])
-        } else if part.starts_with('=') {
-            (Constraint::Exact, &part[1..])
+        } else if let Some(tail) = part.strip_prefix('^') {
+            (Constraint::MatchMajor, tail)
+        } else if let Some(tail) = part.strip_prefix('~') {
+            (Constraint::MatchMinor, tail)
+        } else if let Some(tail) = part.strip_prefix(">=") {
+            (Constraint::AtLeast, tail)
+        } else if let Some(tail) = part.strip_prefix("<=") {
+            (Constraint::AtMost, tail)
+        } else if let Some(tail) = part.strip_prefix('<') {
+            (Constraint::Less, tail)
+        } else if let Some(tail) = part.strip_prefix('>') {
+            (Constraint::Greater, tail)
+        } else if let Some(tail) = part.strip_prefix('=') {
+            (Constraint::Exact, tail)
         } else if part.parse::<i64>().is_ok() {
             (Constraint::MatchMajor, part)
         } else {
@@ -363,13 +365,11 @@ fn parse_request_term(term: &str) -> Result<RequestTerm, String> {
 
         let mut part_str = constraint.1.to_string();
 
-        let minor_match = Regex::new(r"^(\d+)\.[x*]").unwrap();
         if let Some(caps) = minor_match.captures(&part_str) {
             constraint.0 = Constraint::MatchMajor;
             part_str = format!("{}.0.0", &caps[1]);
         }
 
-        let patch_match = Regex::new(r"^(\d+)\.(\d+)\.[x*]").unwrap();
         if let Some(caps) = patch_match.captures(&part_str) {
             constraint.0 = Constraint::MatchMinor;
             part_str = format!("{}.{}.0", &caps[1], &caps[2]);
