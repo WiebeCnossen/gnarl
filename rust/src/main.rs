@@ -57,7 +57,7 @@ fn audit(project: &Package) -> bool {
 
     println!("yarn npm audit --recursive");
     let output = Command::new("yarn")
-        .args(&["npm", "audit", "--json", "--recursive"])
+        .args(["npm", "audit", "--json", "--recursive"])
         .output();
 
     let output = match output {
@@ -69,7 +69,7 @@ fn audit(project: &Package) -> bool {
             } else {
                 // Yarn 4+ might return non-zero exit code even with valid output
                 Command::new("yarn")
-                    .args(&["npm", "audit", "--json", "--recursive"])
+                    .args(["npm", "audit", "--json", "--recursive"])
                     .output()
                     .unwrap_or_else(|_| {
                         eprintln!("Error running yarn npm audit: {}", e);

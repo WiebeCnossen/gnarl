@@ -330,12 +330,10 @@ fn parse_request_term(term: &str) -> Result<RequestTerm, String> {
             (Constraint::Greater, &part[1..])
         } else if part.starts_with('=') {
             (Constraint::Exact, &part[1..])
+        } else if part.parse::<i64>().is_ok() {
+            (Constraint::MatchMajor, part)
         } else {
-            if part.parse::<i64>().is_ok() {
-                (Constraint::MatchMajor, part)
-            } else {
-                (Constraint::Exact, part)
-            }
+            (Constraint::Exact, part)
         };
 
         if saw_hyphen && constraint.0 != Constraint::Exact {

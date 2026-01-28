@@ -244,7 +244,7 @@ impl Lock {
             };
 
             let mut best_version = version.clone();
-            for (present_source, _) in &versions {
+            for present_source in versions.keys() {
                 let present = semver::Version::parse(present_source)
                     .unwrap_or_else(|_| {
                         eprintln!("Error parsing version: {}", present_source);
@@ -256,7 +256,7 @@ impl Lock {
                 }
             }
 
-            if value.version.as_ref().map(|s| s.as_str()) != Some(best_version.to_string().as_str()) {
+            if value.version.as_deref() != Some(best_version.to_string().as_str()) {
                 if let Some(new_resolution) = versions.get(&best_version.to_string()) {
                     updated_resolutions.insert(key.clone(), new_resolution.clone());
                 }
@@ -269,7 +269,7 @@ impl Lock {
         for (version, resolution) in &versions {
             let mut keys: Vec<String> = Vec::new();
             for (key, res) in &updated_resolutions {
-                if res.version.as_ref().map(|s| s.as_str()) == Some(version.as_str()) {
+                if res.version.as_deref() == Some(version.as_str()) {
                     keys.push(key.clone());
                 }
             }
