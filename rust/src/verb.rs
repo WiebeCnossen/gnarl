@@ -1,42 +1,33 @@
-use std::env::Args;
+use std::{env::Args, iter};
 
 pub enum Verb {
     Auto(bool),
     Reset(Vec<String>, bool),
+    Info,
     Help,
 }
 
 impl TryFrom<Args> for Verb {
     type Error = crate::Error;
     fn try_from(mut args: Args) -> Result<Self, Self::Error> {
-        match args.next().map(|s| s.as_str()) {
-            Some("auto") => Ok(Verb::auto(args)),
+        match args.nth(1).as_deref() {
+            None => Ok(Verb::Auto(false)),
+            Some("-n") => Ok(Verb::Auto(true)),
+            Some("auto") => Ok(Verb::Auto(args.next().as_deref() == Some("-n"))),
             Some("reset") => Ok(Verb::reset(args)),
+            Some("info") => Ok(Verb::Info),
             Some("help") => Ok(Verb::Help),
             Some(verb) => Err(crate::Error::String(format!("Unknown verb {}", verb))),
-            None => Ok(Verb::Auto(false)),
         }
     }
 }
 
 impl Verb {
-    fn auto(mut args: Args) -> Self {
-        let no_install = args.any(|arg| arg == "--no-install");
-        Verb::Auto(no_install)
-    }
-
-    fn reset(args: Args) -> Self {
-        let mut packages = vec![];
-        let mut no_install = false;
-
-        for arg in args {
-            if arg == "--no-install" {
-                no_install = true;
-            } else {
-                packages.push(arg);
-            }
+    fn reset(mut args: Args) -> Self {
+        match args.next().as_deref() {
+            None => Verb::Reset(vec![], false),
+            Some("-n") => Verb::Reset(args.collect(), true),
+            Some(arg) => Verb::Reset(iter::once(arg.to_string()).chain(args).collect(), false),
         }
-
-        Verb::Reset(packages, no_install)
     }
 }

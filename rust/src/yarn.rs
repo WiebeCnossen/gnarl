@@ -53,13 +53,16 @@ impl Yarn {
     }
 
     pub fn print_info(&self) {
-        println!("# resolutions: {}", self.package.resolutions().len());
-        println!("# dependencies: {}", self.package.dependencies().len());
+        println!("# resolutions: {:11}", self.package.resolutions().len());
         println!(
-            "# dev dependencies: {}",
+            "# dependencies: {:10}",
+            self.package.dependencies().len()
+        );
+        println!(
+            "# dev dependencies: {:6}",
             self.package.dev_dependencies().len()
         );
-        println!("# lock entries: {}", self.lock.len());
+        println!("# lock entries: {:10}", self.lock.len());
     }
 
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
@@ -89,10 +92,19 @@ impl Yarn {
         self.run(false, &["npm", "audit", "--json", "--recursive"])
     }
 
-    pub fn reset(&mut self, packages: &[&str]) -> Result<bool, crate::Error> {
+    pub fn resolve(
+        &mut self,
+        package: impl AsRef<str>,
+        request: impl AsRef<str>,
+    ) -> Result<(), crate::Error> {
+        self.package.resolve(package.as_ref(), request.as_ref());
+        self.package.save()
+    }
+
+    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, crate::Error> {
         let mut dirty = false;
         for package in packages {
-            dirty = self.lock.reset(package) || dirty;
+            dirty = self.lock.reset(package.as_ref()) || dirty;
         }
 
         if !dirty {

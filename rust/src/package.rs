@@ -61,11 +61,16 @@ impl Package {
         self.get_string_map("devDependencies").collect()
     }
 
+    pub fn resolve(&mut self, package: &str, request: &str) {
+        self.root["resolutions"][package] = json!(request);
+    }
+
     pub fn save(&self) -> Result<(), crate::Error> {
         // Write back with pretty printing (4 spaces indent, like npm/yarn usually do)
         let file_out = File::create(&self.path)?;
         let mut writer = BufWriter::new(file_out);
         serde_json::to_writer_pretty(&mut writer, &self.root)?;
+        writeln!(&mut writer)?;
         writer.flush()?;
         Ok(())
     }

@@ -7,22 +7,12 @@ mod yarn;
 use std::env;
 use std::process::exit;
 
+use crate::verb::Verb;
 use crate::yarn::Yarn;
 
 pub use error::Error;
 
 const VERSION: &str = "2.0.0";
-
-fn help() {
-    println!("gnarl {} - the yarn v4 companion tool", VERSION);
-    println!("usage: gnarl [<auto | audit | check | fix | help | reset> <args>]");
-    println!("> gnarl [auto]");
-    println!("> gnarl audit");
-    println!("> gnarl check");
-    println!("> gnarl fix package-name safe-version-request");
-    println!("> gnarl help");
-    println!("> gnarl reset package-names...");
-}
 
 fn main() {
     if let Err(e) = run() {
@@ -32,49 +22,43 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
-    let args: Vec<String> = env::args().collect();
-
-    let verb = if args.len() > 1 {
-        match args[1].as_str() {
-            "audit" | "check" | "fix" | "help" | "reset" => args[1].as_str(),
-            _ => {
-                eprintln!("unknown verb: {}", args[1]);
-                exit(1);
-            }
-        }
-    } else {
-        "auto"
-    };
+    let verb = Verb::try_from(env::args())?;
 
     match verb {
-        "auto" => {
-            let yarn = Yarn::new()?;
-            yarn.print_info();
-        }
-        "audit" => {
-            println!("gnarl audit");
-        }
-        "check" => {
-            println!("gnarl check");
-        }
-        "fix" => {
-            println!("gnarl fix");
-        }
-        "help" => {
-            help();
-        }
-        "reset" => {
+        Verb::Auto(no_install) => {
             let mut yarn = Yarn::new()?;
-            let dirty = yarn.reset(&args[2..].iter().map(|s| s.as_str()).collect::<Vec<&str>>())?;
-            if dirty {
-                yarn.install().unwrap();
-                yarn.dedupe().unwrap();
-                yarn.audit().unwrap();
+            yarn.print_info();
+            if !no_install {
+                yarn.install()?;
+                yarn.dedupe()?;
+                yarn.audit()?;
+            } else {
+                yarn.resolve("react@18.3.1", "^19")?;
             }
         }
-        _ => {
-            eprintln!("unreachable verb {}", verb);
-            exit(1);
+
+        Verb::Reset(packages, no_install) => {
+            let mut yarn = Yarn::new()?;
+            let dirty = yarn.reset(&packages)?;
+            if dirty && !no_install {
+                yarn.install()?;
+                yarn.dedupe()?;
+                yarn.audit()?;
+            }
+        }
+
+        Verb::Help => {
+            println!("gnarl {} - the yarn v4 companion tool", VERSION);
+            println!("usage: gnarl [<auto | reset | info | help> <args>]");
+            println!("> gnarl [auto] [-n]");
+            println!("> gnarl reset [-n] package-names...");
+            println!("> gnarl info");
+            println!("> gnarl help");
+        }
+
+        Verb::Info => {
+            let yarn = Yarn::new()?;
+            yarn.print_info();
         }
     };
 
