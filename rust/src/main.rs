@@ -1,34 +1,17 @@
+mod error;
 mod lock;
 mod package;
+mod verb;
 mod yarn;
 
 use std::env;
 use std::process::exit;
 
-use crate::yarn::{Yarn};
+use crate::yarn::Yarn;
+
+pub use error::Error;
 
 const VERSION: &str = "2.0.0";
-
-#[derive(Debug)]
-enum Error {
-    Str(&'static str),
-    String(String),
-}
-
-impl From<&'static str> for Error {
-    fn from(s: &'static str) -> Self {
-        Error::Str(s)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Str(s) => write!(f, "{}", s),
-            Error::String(s) => write!(f, "{}", s),
-        }
-    }
-}
 
 fn help() {
     println!("gnarl {} - the yarn v4 companion tool", VERSION);
@@ -64,14 +47,10 @@ fn run() -> Result<(), Error> {
     };
 
     match verb {
-        "auto" => loop {
+        "auto" => {
             let yarn = Yarn::new()?;
             yarn.print_info();
-            yarn.install().unwrap();
-            yarn.dedupe().unwrap();
-            yarn.audit().unwrap();
-            break;
-        },
+        }
         "audit" => {
             println!("gnarl audit");
         }
@@ -85,7 +64,13 @@ fn run() -> Result<(), Error> {
             help();
         }
         "reset" => {
-            println!("gnarl reset");
+            let mut yarn = Yarn::new()?;
+            let dirty = yarn.reset(&args[2..].iter().map(|s| s.as_str()).collect::<Vec<&str>>())?;
+            if dirty {
+                yarn.install().unwrap();
+                yarn.dedupe().unwrap();
+                yarn.audit().unwrap();
+            }
         }
         _ => {
             eprintln!("unreachable verb {}", verb);

@@ -12,21 +12,6 @@ pub struct Package {
     root: Value,
 }
 
-const PACKAGE_INACCESSIBLE: &'static str = "package.json is inaccessible";
-const PACKAGE_CORRUPTED: &'static str = "package.json is corrupted";
-
-impl From<std::io::Error> for crate::Error {
-    fn from(_: std::io::Error) -> Self {
-        PACKAGE_INACCESSIBLE.into()
-    }
-}
-
-impl From<serde_json::Error> for crate::Error {
-    fn from(_: serde_json::Error) -> Self {
-        PACKAGE_CORRUPTED.into()
-    }
-}
-
 impl Package {
     pub fn read(path: PathBuf) -> Result<Self, crate::Error> {
         let mut root: Value = serde_json::from_reader(File::open(&path)?)?;

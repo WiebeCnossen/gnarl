@@ -1,11 +1,11 @@
-use std::{collections::HashMap, fs, path::PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
+use std::{collections::HashMap, fs, path::PathBuf};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct YarnLockV2 {
     #[serde(rename = "__metadata")]
-    metadata: Option<Value>,  // or your struct if you know the shape
+    metadata: Option<Value>, // or your struct if you know the shape
     // The rest is package@spec → mapping of version, resolution, etc.
     #[serde(flatten)]
     packages: HashMap<String, Value>,
@@ -16,14 +16,6 @@ pub struct Lock {
     root: YarnLockV2,
 }
 
-const LOCK_CORRUPTED: &'static str = "yarn.lock is corrupted";
-
-impl From<serde_yaml::Error> for crate::Error {
-    fn from(_: serde_yaml::Error) -> Self {
-        LOCK_CORRUPTED.into()
-    }
-}
-
 impl Lock {
     pub fn read(path: PathBuf) -> Result<Self, crate::Error> {
         let content = fs::read_to_string(&path)?;
@@ -31,8 +23,24 @@ impl Lock {
         Ok(Self { path, root })
     }
 
-    pub fn reset(&mut self, package: &str) {
-        self.root.packages.retain(|k, _| !k.starts_with(package));
+    pub fn reset(&mut self, package: &str) -> bool {
+        let len = self.root.packages.len();
+        self.root.packages.retain(|k, _| {
+            if let Some(tail) = k.strip_prefix(package)
+                && tail.starts_with('@')
+            {
+                false
+            } else {
+                true
+            }
+        });
+
+        if len == self.root.packages.len() {
+            return false;
+        }
+
+        println!("Reset {}", package);
+        true
     }
 
     pub fn save(&self) -> Result<(), crate::Error> {
@@ -43,9 +51,5 @@ impl Lock {
 
     pub fn len(&self) -> usize {
         self.root.packages.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.root.packages.is_empty()
     }
 }

@@ -5,8 +5,8 @@ use std::{
     process::{Command, Output},
 };
 
-const AIKIDO_YARN_NAME: &'static str = "aikido-yarn";
-const YARN_NAME: &'static str = "yarn";
+const AIKIDO_YARN_NAME: &str = "aikido-yarn";
+const YARN_NAME: &str = "yarn";
 
 pub struct Yarn {
     aikido_path: Option<PathBuf>,
@@ -15,9 +15,9 @@ pub struct Yarn {
     lock: Lock,
 }
 
-const YARN_NOT_FOUND: &'static str = "yarn not installed or not in PATH";
-const PACKAGE_NOT_FOUND: &'static str = "package.json not found in current directory";
-const LOCK_NOT_FOUND: &'static str = "yarn.lock not found in current directory";
+const YARN_NOT_FOUND: &str = "yarn not installed or not in PATH";
+const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
+const LOCK_NOT_FOUND: &str = "yarn.lock not found in current directory";
 
 impl From<which::Error> for crate::Error {
     fn from(_: which::Error) -> Self {
@@ -87,5 +87,19 @@ impl Yarn {
 
     pub fn audit(&self) -> Result<Output, Error> {
         self.run(false, &["npm", "audit", "--json", "--recursive"])
+    }
+
+    pub fn reset(&mut self, packages: &[&str]) -> Result<bool, crate::Error> {
+        let mut dirty = false;
+        for package in packages {
+            dirty = self.lock.reset(package) || dirty;
+        }
+
+        if !dirty {
+            return Ok(false);
+        }
+
+        self.lock.save()?;
+        Ok(true)
     }
 }
