@@ -5,7 +5,6 @@ mod verb;
 mod yarn;
 
 use std::env;
-use std::process::exit;
 
 use crate::verb::Verb;
 use crate::yarn::Yarn;
@@ -14,14 +13,7 @@ pub use error::Error;
 
 const VERSION: &str = "2.0.0";
 
-fn main() {
-    if let Err(e) = run() {
-        eprintln!("error: {}", e);
-        exit(1);
-    }
-}
-
-fn run() -> Result<(), Error> {
+fn main() -> Result<(), Error> {
     let verb = Verb::try_from(env::args())?;
 
     match verb {

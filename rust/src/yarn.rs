@@ -54,10 +54,7 @@ impl Yarn {
 
     pub fn print_info(&self) {
         println!("# resolutions: {:11}", self.package.resolutions().len());
-        println!(
-            "# dependencies: {:10}",
-            self.package.dependencies().len()
-        );
+        println!("# dependencies: {:10}", self.package.dependencies().len());
         println!(
             "# dev dependencies: {:6}",
             self.package.dev_dependencies().len()

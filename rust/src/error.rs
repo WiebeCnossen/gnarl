@@ -1,4 +1,3 @@
-#[derive(Debug)]
 pub enum Error {
     Str(&'static str),
     String(String),
@@ -28,6 +27,12 @@ impl From<serde_yaml::Error> for Error {
     }
 }
 
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -36,3 +41,5 @@ impl std::fmt::Display for Error {
         }
     }
 }
+
+impl std::error::Error for Error {}
