@@ -1,12 +1,14 @@
+mod cmd;
 mod error;
 mod lock;
+mod npm;
 mod package;
-mod verb;
 mod yarn;
 
 use std::env;
 
-use crate::verb::Verb;
+use crate::cmd::{Command, Verb::*};
+use crate::npm::Npm;
 use crate::yarn::Yarn;
 
 pub use error::Error;
@@ -14,13 +16,13 @@ pub use error::Error;
 const VERSION: &str = "2.0.0";
 
 fn main() -> Result<(), Error> {
-    let verb = Verb::try_from(env::args())?;
+    let command = Command::try_from(env::args())?;
 
-    match verb {
-        Verb::Auto(no_install) => {
+    match command.verb() {
+        Auto => {
             let mut yarn = Yarn::new()?;
             yarn.print_info();
-            if !no_install {
+            if !command.options().no_install() {
                 yarn.install()?;
                 yarn.dedupe()?;
                 yarn.audit()?;
@@ -29,17 +31,17 @@ fn main() -> Result<(), Error> {
             }
         }
 
-        Verb::Reset(packages, no_install) => {
+        Reset => {
             let mut yarn = Yarn::new()?;
-            let dirty = yarn.reset(&packages)?;
-            if dirty && !no_install {
+            let dirty = yarn.reset(command.parameters())?;
+            if dirty && !command.options().no_install() {
                 yarn.install()?;
                 yarn.dedupe()?;
                 yarn.audit()?;
             }
         }
 
-        Verb::Help => {
+        Help => {
             println!("gnarl {} - the yarn v4 companion tool", VERSION);
             println!("usage: gnarl [<auto | reset | info | help> <args>]");
             println!("> gnarl [auto] [-n]");
@@ -48,9 +50,48 @@ fn main() -> Result<(), Error> {
             println!("> gnarl help");
         }
 
-        Verb::Info => {
+        Info => {
             let yarn = Yarn::new()?;
             yarn.print_info();
+
+            let mut npm = Npm::new()?;
+            for parameter in command.parameters() {
+                npm.retrieve_packument(parameter)?;
+
+                println!(
+                    "{}: {} versions",
+                    parameter,
+                    npm.packument(parameter)?.versions().count()
+                );
+
+                if let Some(version) = npm.packument(parameter)?.versions().last() {
+                    println!("{}@{}", parameter, version);
+                    for key in npm.packument(parameter)?.version(version)?.dependencies() {
+                        let value = npm
+                            .packument(parameter)?
+                            .version(version)?
+                            .dependency(key)?;
+                        println!("  {}: {}", key, value);
+                    }
+                }
+
+                println!(
+                    "{}: {} all versions",
+                    parameter,
+                    npm.packument(parameter)?.all_versions().count()
+                );
+
+                if let Some(version) = npm.packument(parameter)?.all_versions().last() {
+                    println!("{}@{}", parameter, version);
+                    for key in npm.packument(parameter)?.version(version)?.dependencies() {
+                        let value = npm
+                            .packument(parameter)?
+                            .version(version)?
+                            .dependency(key)?;
+                        println!("  {}: {}", key, value);
+                    }
+                }
+            }
         }
     };
 

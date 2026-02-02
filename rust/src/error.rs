@@ -9,6 +9,12 @@ impl From<&'static str> for Error {
     }
 }
 
+impl From<String> for Error {
+    fn from(s: String) -> Self {
+        Error::String(s)
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Error::String(error.to_string())
@@ -23,6 +29,18 @@ impl From<serde_json::Error> for Error {
 
 impl From<serde_yaml::Error> for Error {
     fn from(error: serde_yaml::Error) -> Self {
+        Error::String(error.to_string())
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(error: reqwest::Error) -> Self {
+        Error::String(error.to_string())
+    }
+}
+
+impl From<nodejs_semver::SemverError> for Error {
+    fn from(error: nodejs_semver::SemverError) -> Self {
         Error::String(error.to_string())
     }
 }
