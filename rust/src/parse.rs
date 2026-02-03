@@ -21,11 +21,22 @@ pub fn split_last<'a>(
 }
 
 pub fn split_name(reference: &str) -> Result<(&str, &str), crate::Error> {
-    split_last("name", reference, "@")
+    let (name, tail) = split_last("name", reference, "@")?;
+    match name.chars().filter(|&c| c == '@').count() {
+        0 => Ok((name, tail)),
+        1 if name.starts_with("@") => Ok((name, tail)),
+        _ => {
+            let name = split_first(reference, "@");
+            let tail = &reference[name.len() + 1..];
+            Ok((name, tail))
+        }
+    }
 }
 
 pub fn split_qualified(qualified: &str) -> Result<(&str, &str), crate::Error> {
-    split_last("qualified", qualified, ":").or_else(|_| split_last("qualified", qualified, "%3A"))
+    split_last("qualified", qualified, ":")
+        .or_else(|_| split_last("qualified", qualified, "%3A"))
+        .or_else(|_| split_last("qualified", qualified, "#"))
 }
 
 pub fn parse_qualified_version(

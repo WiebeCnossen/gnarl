@@ -3,6 +3,7 @@ use crate::{
     audit::Advisory,
     lock::Lock,
     package::{Dependency, Resolution},
+    parse,
     project::Project,
 };
 use std::{
@@ -16,7 +17,7 @@ const YARN_NAME: &str = "yarn";
 pub struct Yarn {
     aikido_path: Option<PathBuf>,
     yarn_path: PathBuf,
-    package: Project,
+    project: Project,
     lock: Lock,
 }
 
@@ -33,7 +34,7 @@ impl Yarn {
             return Err(PACKAGE_NOT_FOUND.into());
         }
 
-        let package = Project::read(package_path)?;
+        let project = Project::read(package_path)?;
 
         let lock_path = PathBuf::from("yarn.lock");
         if !lock_path.exists() {
@@ -45,17 +46,17 @@ impl Yarn {
         Ok(Self {
             aikido_path,
             yarn_path,
-            package,
+            project,
             lock,
         })
     }
 
     pub fn print_info(&self) {
-        println!("# resolutions: {:11}", self.package.resolutions().len());
-        println!("# dependencies: {:10}", self.package.dependencies().len());
+        println!("# resolutions: {:11}", self.project.resolutions().len());
+        println!("# dependencies: {:10}", self.project.dependencies().len());
         println!(
             "# dev dependencies: {:6}",
-            self.package.dev_dependencies().len()
+            self.project.dev_dependencies().len()
         );
         println!("# lock entries: {:10}", self.lock.len());
     }
@@ -125,5 +126,26 @@ impl Yarn {
 
     pub fn resolutions(&self, name: impl AsRef<str>) -> Result<Vec<Resolution>, Error> {
         self.lock.resolutions(name.as_ref())
+    }
+
+    pub fn reset_resolutions(&mut self) -> Result<bool, Error> {
+        let mut dirty = false;
+        for (package, requested) in self.project.resolutions() {
+            println!("Check resolution for {}", package);
+            let (name, _) = parse::split_name(&package)?;
+            let resolutions = self.resolutions(name)?;
+            if !resolutions.iter().any(|resolution| {
+                resolution
+                    .requests()
+                    .iter()
+                    .flat_map(|request| resolution.original(request))
+                    .any(|request| request == requested)
+            }) {
+                println!("Drop resolution for {}", package);
+                self.project.reset_resolution(&package);
+                dirty = true;
+            }
+        }
+        Ok(dirty)
     }
 }

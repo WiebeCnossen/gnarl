@@ -109,6 +109,10 @@ impl Npm {
     }
 
     pub fn retrieve_packument(&mut self, package: &str) -> Result<(), crate::Error> {
+        if self.packuments.contains_key(package) {
+            return Ok(());
+        }
+
         let url = format!("https://registry.npmjs.org/{}", package);
         let response = self.client.get(&url).send()?.error_for_status()?;
         let packument: PackumentDto = serde_json::from_reader(response)?;

@@ -49,10 +49,6 @@ impl Project {
             .map(|(key, value)| (key.to_string(), value.as_str().unwrap().to_string()))
     }
 
-    pub fn resolutions(&self) -> HashMap<String, String> {
-        self.get_string_map("resolutions").collect()
-    }
-
     pub fn dependencies(&self) -> HashMap<String, String> {
         self.get_string_map("dependencies").collect()
     }
@@ -61,8 +57,19 @@ impl Project {
         self.get_string_map("devDependencies").collect()
     }
 
-    pub fn resolve(&mut self, package: &str, request: &str) {
-        self.root["resolutions"][package] = json!(request);
+    pub fn resolutions(&self) -> HashMap<String, String> {
+        self.get_string_map("resolutions").collect()
+    }
+
+    pub fn set_resolution(&mut self, package: &str, request: impl Into<String>) {
+        self.root["resolutions"][package] = json!(request.into());
+    }
+
+    pub fn reset_resolution(&mut self, package: &str) {
+        self.root["resolutions"]
+            .as_object_mut()
+            .unwrap()
+            .remove(package);
     }
 
     pub fn save(&self) -> Result<(), crate::Error> {

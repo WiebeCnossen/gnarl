@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use nodejs_semver::Range;
+use nodejs_semver::{OutsideDirection, Range, Version};
 
 use crate::{
     Error,
@@ -28,6 +28,80 @@ impl Gnarl {
         })
     }
 
+    pub fn check(&mut self) -> Result<(), Error> {
+        let yarn = Yarn::new()?;
+
+        let advisories = yarn.audit()?;
+        let mut deprecations = vec![];
+        let mut resolutions = vec![];
+        let mut fixes = vec![];
+        let mut errors = vec![];
+        for advisory in advisories {
+            if advisory.id().contains(" (deprecation)") {
+                deprecations.push(format!(
+                    "\"{}@{}\"",
+                    advisory.module_name(),
+                    advisory
+                        .tree_versions()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                continue;
+            }
+
+            self.npm.retrieve_packument(advisory.module_name())?;
+            let packument = self.npm.packument(advisory.module_name())?;
+            let yarn_resolutions = yarn.resolutions(advisory.module_name())?;
+            for tree_version in advisory.tree_versions() {
+                let resolution = yarn_resolutions
+                    .iter()
+                    .find(|resolution| {
+                        resolution
+                            .package()
+                            .version()
+                            .map(|v| v.to_string() == tree_version.to_string())
+                            .unwrap_or(false)
+                    })
+                    .ok_or_else(|| format!("Resolution for {} not found", tree_version))?;
+                for request in resolution.requests() {
+                    let original_request = resolution.original(request)?;
+                    if let Some(fix) = get_fix(packument, advisory.vulnerable_versions(), request) {
+                        fixes.push(format!(
+                            "\"{}@{}\": \"^{}\",",
+                            advisory.module_name(),
+                            original_request,
+                            fix
+                        ));
+                    } else if let Some(fix) =
+                        get_resolution(packument, advisory.vulnerable_versions(), request)
+                    {
+                        resolutions.push(format!(
+                            "\"{}@{}\": \"^{}\",",
+                            advisory.module_name(),
+                            original_request,
+                            fix
+                        ));
+                    } else {
+                        errors.push(format!(
+                            "\"{}@{}\"",
+                            advisory.module_name(),
+                            original_request
+                        ));
+                    }
+                }
+            }
+        }
+
+        print_section("Deprecations", deprecations);
+        print_section("Fixes", fixes);
+        print_section("Resolutions", resolutions);
+        print_section("Unresolved issues", errors);
+
+        Ok(())
+    }
+
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<(), Error> {
         let mut yarn = Yarn::new()?;
         let dirty = yarn.reset(packages)?;
@@ -42,21 +116,29 @@ impl Gnarl {
     pub fn auto(&mut self) -> Result<(), Error> {
         let _: () = loop {
             let mut yarn = Yarn::new()?;
-            yarn.install()?;
-            yarn.dedupe()?;
+            loop {
+                yarn.install()?;
+                yarn.dedupe()?;
+                if !yarn.reset_resolutions()? {
+                    break;
+                }
+            }
 
             let mut dirty = false;
             let mut advisories = yarn.audit()?;
+            let mut done = HashSet::new();
 
             while let Some(advisory) = advisories.pop() {
-                dirty = self.fix(&mut yarn, advisory, &mut advisories)? || dirty;
+                if done.insert(format!("{} {}", advisory.id(), advisory.module_name())) {
+                    dirty = self.fix(&mut yarn, advisory, &mut advisories)? || dirty;
+                }
             }
 
             if !dirty || self.options.no_install() {
                 break;
             }
         };
-        Ok(())
+        self.check()
     }
 
     fn fix(
@@ -133,6 +215,7 @@ impl Gnarl {
             .collect::<Vec<_>>()
             .join(" || ");
         Ok(Advisory::new(
+            advisory.id().to_owned(),
             dependent.name().to_owned(),
             advisory.severity(),
             parse::parse_range(&vulnerable_versions)?,
@@ -143,7 +226,39 @@ impl Gnarl {
 }
 
 fn has_fix(packument: &Packument, vulnerable_versions: &Range, request: &Range) -> bool {
+    get_fix(packument, vulnerable_versions, request).is_some()
+}
+
+fn get_fix<'a>(
+    packument: &'a Packument,
+    vulnerable_versions: &Range,
+    request: &Range,
+) -> Option<&'a Version> {
     packument
         .versions()
-        .any(|version| request.satisfies(version) && !vulnerable_versions.satisfies(version))
+        .find(|version| request.satisfies(version) && !vulnerable_versions.satisfies(version))
+}
+
+fn get_resolution<'a>(
+    packument: &'a Packument,
+    vulnerable_versions: &Range,
+    request: &Range,
+) -> Option<&'a Version> {
+    packument.versions().find(|version| {
+        request.outside(version, OutsideDirection::Higher, false) == Ok(true)
+            && !vulnerable_versions.satisfies(version)
+    })
+}
+
+fn print_section(title: &str, mut lines: Vec<String>) {
+    if lines.is_empty() {
+        return;
+    }
+
+    println!("{}:", title);
+    lines.sort_unstable();
+    lines.dedup();
+    for line in lines {
+        println!("    {}", line);
+    }
 }

@@ -27,6 +27,7 @@ impl Options {
 pub enum Verb {
     Auto,
     Reset,
+    Check,
     Info,
     Help,
 }
@@ -67,6 +68,7 @@ impl TryFrom<Args> for Command {
         let verb = match parameters.remove(0).as_str() {
             "auto" => Verb::Auto,
             "reset" => Verb::Reset,
+            "check" => Verb::Check,
             "info" => Verb::Info,
             "help" => Verb::Help,
             unknown => return Err(format!("Unknown verb {}", unknown).into()),

@@ -34,11 +34,17 @@ fn main() -> Result<(), Error> {
             gnarl.reset(command.parameters())?;
         }
 
+        Check => {
+            let mut gnarl = Gnarl::new(command.options())?;
+            gnarl.check()?;
+        }
+
         Help => {
             println!("gnarl {} - the yarn v4 companion tool", VERSION);
-            println!("usage: gnarl [<auto | reset | info | help> <args>]");
+            println!("usage: gnarl [<auto | reset | check | info | help> <args>]");
             println!("> gnarl [auto] [-n]");
             println!("> gnarl reset [-n] package-names...");
+            println!("> gnarl check");
             println!("> gnarl info");
             println!("> gnarl help");
         }

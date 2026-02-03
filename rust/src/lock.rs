@@ -97,6 +97,14 @@ impl Lock {
                     })
                     .collect();
 
+                let original_requests = key
+                    .split(',')
+                    .flat_map(|qualified| {
+                        let (_, range) = parse::split_qualified(qualified).ok()?;
+                        Some(range.to_owned())
+                    })
+                    .collect();
+
                 let dependencies =
                     if let Some(mapping) = value.get("dependencies").and_then(|v| v.as_mapping()) {
                         mapping
@@ -112,7 +120,12 @@ impl Lock {
                         Vec::new()
                     };
 
-                Ok(Resolution::new(package, requests, dependencies))
+                Ok(Resolution::new(
+                    package,
+                    requests,
+                    original_requests,
+                    dependencies,
+                ))
             })
             .collect::<Result<Vec<Resolution>, crate::Error>>()
     }

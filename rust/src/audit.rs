@@ -23,6 +23,8 @@ pub enum Severity {
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 struct AuditDtoChildren {
+    #[serde(rename = "ID")]
+    id: serde_json::Value, // Accepts either integer or string
     #[serde(rename = "Severity")]
     severity: Severity,
     #[serde(rename = "Vulnerable Versions")]
@@ -34,6 +36,7 @@ struct AuditDtoChildren {
 }
 
 pub struct Advisory {
+    id: String,
     module_name: String,
     severity: Severity,
     vulnerable_versions: Range,
@@ -45,6 +48,7 @@ impl TryFrom<AuditDto> for Advisory {
     type Error = crate::Error;
     fn try_from(dto: AuditDto) -> Result<Self, Self::Error> {
         Ok(Self {
+            id: dto.children.id.to_string(),
             module_name: dto.value,
             severity: dto.children.severity,
             vulnerable_versions: parse::parse_range(&dto.children.vulnerable_versions)?,
@@ -66,6 +70,7 @@ impl TryFrom<AuditDto> for Advisory {
 
 impl Advisory {
     pub fn new(
+        id: String,
         module_name: String,
         severity: Severity,
         vulnerable_versions: Range,
@@ -73,6 +78,7 @@ impl Advisory {
         dependents: Vec<Package>,
     ) -> Self {
         Self {
+            id,
             module_name,
             severity,
             vulnerable_versions,
@@ -84,6 +90,10 @@ impl Advisory {
     pub fn parse(s: &str) -> Result<Self, crate::Error> {
         let dto: AuditDto = serde_json::from_str(s)?;
         Advisory::try_from(dto)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
     pub fn module_name(&self) -> &str {
