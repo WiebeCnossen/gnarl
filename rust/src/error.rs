@@ -1,3 +1,7 @@
+use std::string::FromUtf8Error;
+
+const YARN_NOT_FOUND: &str = "yarn not found";
+
 pub enum Error {
     Str(&'static str),
     String(String),
@@ -41,6 +45,18 @@ impl From<reqwest::Error> for Error {
 
 impl From<nodejs_semver::SemverError> for Error {
     fn from(error: nodejs_semver::SemverError) -> Self {
+        Error::String(error.to_string())
+    }
+}
+
+impl From<which::Error> for crate::Error {
+    fn from(_: which::Error) -> Self {
+        YARN_NOT_FOUND.into()
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(error: FromUtf8Error) -> Self {
         Error::String(error.to_string())
     }
 }

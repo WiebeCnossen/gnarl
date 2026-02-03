@@ -42,8 +42,8 @@ impl Command {
         self.verb
     }
 
-    pub fn options(&self) -> &Options {
-        &self.options
+    pub fn options(&self) -> Options {
+        self.options
     }
 
     pub fn parameters(&self) -> &[String] {

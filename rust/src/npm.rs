@@ -4,6 +4,8 @@ use nodejs_semver::{Range, Version};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
+use crate::parse;
+
 #[derive(Deserialize)]
 pub struct PackumentVersionDto {
     dependencies: Option<HashMap<String, String>>,
@@ -15,6 +17,7 @@ struct PackumentDto {
     versions: HashMap<String, PackumentVersionDto>,
 }
 
+#[derive(Clone)]
 pub struct PackumentVersion {
     version: Version,
     dependencies: HashMap<String, Range>,
@@ -32,6 +35,7 @@ impl PackumentVersion {
     }
 }
 
+#[derive(Clone)]
 pub struct Packument {
     versions: Vec<PackumentVersion>,
 }
@@ -61,12 +65,14 @@ impl TryFrom<PackumentDto> for Packument {
             .versions
             .into_iter()
             .map(|(version, ver_dto)| {
-                let ver = Version::parse(&version)?;
+                let ver = parse::parse_version(&version)?;
                 let dependencies = match ver_dto.dependencies {
                     Some(deps) => {
                         let mut result = HashMap::new();
                         for (key, value) in deps {
-                            result.insert(key, Range::parse(&value)?);
+                            if let Ok(range) = parse::parse_range(&value) {
+                                result.insert(key, range);
+                            }
                         }
                         result
                     }

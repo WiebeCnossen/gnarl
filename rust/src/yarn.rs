@@ -1,6 +1,11 @@
-use crate::{lock::Lock, package::Package};
+use crate::{
+    Error,
+    audit::Advisory,
+    lock::Lock,
+    package::{Dependency, Resolution},
+    project::Project,
+};
 use std::{
-    io::Error,
     path::PathBuf,
     process::{Command, Output},
 };
@@ -11,22 +16,15 @@ const YARN_NAME: &str = "yarn";
 pub struct Yarn {
     aikido_path: Option<PathBuf>,
     yarn_path: PathBuf,
-    package: Package,
+    package: Project,
     lock: Lock,
 }
 
-const YARN_NOT_FOUND: &str = "yarn not installed or not in PATH";
 const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
 const LOCK_NOT_FOUND: &str = "yarn.lock not found in current directory";
 
-impl From<which::Error> for crate::Error {
-    fn from(_: which::Error) -> Self {
-        YARN_NOT_FOUND.into()
-    }
-}
-
 impl Yarn {
-    pub fn new() -> Result<Self, crate::Error> {
+    pub fn new() -> Result<Self, Error> {
         let aikido_path = which::which(AIKIDO_YARN_NAME).ok();
         let yarn_path = which::which(YARN_NAME)?;
 
@@ -35,7 +33,7 @@ impl Yarn {
             return Err(PACKAGE_NOT_FOUND.into());
         }
 
-        let package = Package::read(package_path)?;
+        let package = Project::read(package_path)?;
 
         let lock_path = PathBuf::from("yarn.lock");
         if !lock_path.exists() {
@@ -73,8 +71,20 @@ impl Yarn {
         } else {
             YARN_NAME
         };
-        println!("{} {}", name, args.join(" "));
-        Command::new(executable).args(args).output()
+        println!(
+            "{} {}",
+            name,
+            args.iter()
+                .take_while(|arg| !arg.starts_with("-"))
+                .map(|arg| arg.to_string())
+                .collect::<Vec<String>>()
+                .join(" ")
+        );
+        let output = Command::new(executable).args(args).output()?;
+        if !output.status.success() && output.stdout.is_empty() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string().into());
+        }
+        Ok(output)
     }
 
     pub fn install(&self) -> Result<Output, Error> {
@@ -85,20 +95,17 @@ impl Yarn {
         self.run(false, &["dedupe"])
     }
 
-    pub fn audit(&self) -> Result<Output, Error> {
-        self.run(false, &["npm", "audit", "--json", "--recursive"])
+    pub fn audit(&self) -> Result<Vec<Advisory>, Error> {
+        let output = self.run(false, &["npm", "audit", "--json", "--recursive"])?;
+        let stdout_str = String::from_utf8(output.stdout)?;
+        let advisories: Vec<Advisory> = stdout_str
+            .lines()
+            .map(Advisory::parse)
+            .collect::<Result<Vec<Advisory>, Error>>()?;
+        Ok(advisories)
     }
 
-    pub fn resolve(
-        &mut self,
-        package: impl AsRef<str>,
-        request: impl AsRef<str>,
-    ) -> Result<(), crate::Error> {
-        self.package.resolve(package.as_ref(), request.as_ref());
-        self.package.save()
-    }
-
-    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, crate::Error> {
+    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
         let mut dirty = false;
         for package in packages {
             dirty = self.lock.reset(package.as_ref()) || dirty;
@@ -110,5 +117,13 @@ impl Yarn {
 
         self.lock.save()?;
         Ok(true)
+    }
+
+    pub fn dependents(&self, name: impl AsRef<str>) -> Result<Vec<Dependency>, Error> {
+        self.lock.dependents(name.as_ref())
+    }
+
+    pub fn resolutions(&self, name: impl AsRef<str>) -> Result<Vec<Resolution>, Error> {
+        self.lock.resolutions(name.as_ref())
     }
 }

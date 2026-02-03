@@ -1,77 +1,113 @@
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::{BufWriter, Write},
-    path::PathBuf,
-};
+use nodejs_semver::{Range, Version};
 
-use serde_json::{Value, json};
+use crate::parse;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Package {
-    path: PathBuf,
-    root: Value,
+    name: String,
+    source: String,
+    version: Option<Version>,
 }
 
 impl Package {
-    pub fn read(path: PathBuf) -> Result<Self, crate::Error> {
-        let mut root: Value = serde_json::from_reader(File::open(&path)?)?;
-        if root
-            .get("resolutions")
-            .and_then(|value| value.as_object())
-            .is_none()
-        {
-            root["resolutions"] = json!({});
-        }
-
-        let mut result = Self { path, root };
-        result.ensure_string_map("resolutions");
-        result.ensure_string_map("dependencies");
-        result.ensure_string_map("devDependencies");
-        Ok(result)
-    }
-
-    fn ensure_string_map(&mut self, key: &str) {
-        if self
-            .root
-            .get(key)
-            .and_then(|value| value.as_object())
-            .is_none()
-        {
-            self.root[key] = json!({});
+    pub fn new(name: String, source: String, version: Option<Version>) -> Self {
+        Self {
+            name,
+            source,
+            version,
         }
     }
 
-    fn get_string_map(&self, key: &str) -> impl Iterator<Item = (String, String)> {
-        self.root[key]
-            .as_object()
-            .unwrap()
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.as_str().unwrap().to_string()))
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
-    pub fn resolutions(&self) -> HashMap<String, String> {
-        self.get_string_map("resolutions").collect()
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
-    pub fn dependencies(&self) -> HashMap<String, String> {
-        self.get_string_map("dependencies").collect()
+    pub fn version(&self) -> Option<&Version> {
+        self.version.as_ref()
+    }
+}
+
+impl TryFrom<String> for Package {
+    type Error = crate::Error;
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        let (name, tail) = parse::split_name(&s)?;
+        let (source, version) = parse::parse_qualified_version(tail)?;
+        Ok(Self::new(name.to_owned(), source.to_owned(), version))
+    }
+}
+
+pub struct Resolution {
+    package: Package,
+    requests: Vec<Range>,
+    dependencies: Vec<Dependency>,
+}
+
+impl Resolution {
+    pub fn new(package: Package, requests: Vec<Range>, dependencies: Vec<Dependency>) -> Self {
+        Self {
+            package,
+            requests,
+            dependencies,
+        }
     }
 
-    pub fn dev_dependencies(&self) -> HashMap<String, String> {
-        self.get_string_map("devDependencies").collect()
+    pub fn package(&self) -> &Package {
+        &self.package
     }
 
-    pub fn resolve(&mut self, package: &str, request: &str) {
-        self.root["resolutions"][package] = json!(request);
+    pub fn requests(&self) -> &[Range] {
+        &self.requests
     }
 
-    pub fn save(&self) -> Result<(), crate::Error> {
-        // Write back with pretty printing (4 spaces indent, like npm/yarn usually do)
-        let file_out = File::create(&self.path)?;
-        let mut writer = BufWriter::new(file_out);
-        serde_json::to_writer_pretty(&mut writer, &self.root)?;
-        writeln!(&mut writer)?;
-        writer.flush()?;
-        Ok(())
+    pub fn dependencies(&self) -> &[Dependency] {
+        &self.dependencies
+    }
+}
+
+pub struct Dependency {
+    name: String,
+    source: String,
+    request: Range,
+}
+
+impl Dependency {
+    pub fn new(name: String, source: String, request: Range) -> Self {
+        Self {
+            name,
+            source,
+            request,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn request(&self) -> &Range {
+        &self.request
+    }
+
+    pub fn parse(request: &str) -> Result<Self, crate::Error> {
+        let (source, tail) = parse::split_qualified(request)?;
+        let (name, range) = parse::split_name(tail)?;
+        let range = parse::parse_range(range)?;
+        Ok(Self::new(name.to_owned(), source.to_owned(), range))
+    }
+
+    pub fn from_qualified_range(name: &str, qualified_range: &str) -> Result<Self, crate::Error> {
+        if let Ok(dependency) = Self::parse(qualified_range) {
+            return Ok(dependency);
+        }
+
+        let (source, range) = parse::parse_qualified_range(qualified_range)?;
+        Ok(Self::new(name.to_owned(), source.to_owned(), range))
     }
 }
