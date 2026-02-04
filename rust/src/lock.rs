@@ -64,7 +64,7 @@ impl Lock {
             .collect())
     }
 
-    fn all_resolutions(&self) -> Result<Vec<Resolution>, crate::Error> {
+    pub fn all_resolutions(&self) -> Result<Vec<Resolution>, crate::Error> {
         self.root
             .packages
             .iter()

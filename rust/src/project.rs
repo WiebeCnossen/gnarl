@@ -61,6 +61,7 @@ impl Project {
         self.get_string_map("resolutions").collect()
     }
 
+    #[allow(unused)]
     pub fn set_resolution(&mut self, package: &str, request: impl Into<String>) {
         self.root["resolutions"][package] = json!(request.into());
     }

@@ -131,21 +131,30 @@ impl Yarn {
     pub fn reset_resolutions(&mut self) -> Result<bool, Error> {
         let mut dirty = false;
         for (package, requested) in self.project.resolutions() {
-            println!("Check resolution for {}", package);
-            let (name, _) = parse::split_name(&package)?;
-            let resolutions = self.resolutions(name)?;
+            if parse::parse_range(&requested).is_err() {
+                continue;
+            }
+
+            let (name, tail) = parse::split_name(&package).unwrap_or((&package, "*"));
+            let range = parse::parse_range(tail)?;
+            let resolutions = self.lock.all_resolutions()?;
             if !resolutions.iter().any(|resolution| {
                 resolution
-                    .requests()
+                    .dependencies()
                     .iter()
-                    .flat_map(|request| resolution.original(request))
-                    .any(|request| request == requested)
+                    .any(|dependency| dependency.name() == name && range.eq(dependency.request()))
             }) {
                 println!("Drop resolution for {}", package);
                 self.project.reset_resolution(&package);
                 dirty = true;
             }
         }
-        Ok(dirty)
+
+        if !dirty {
+            return Ok(false);
+        }
+
+        self.project.save()?;
+        Ok(true)
     }
 }

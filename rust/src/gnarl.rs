@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use nodejs_semver::{OutsideDirection, Range, Version};
 
@@ -33,8 +33,8 @@ impl Gnarl {
 
         let advisories = yarn.audit()?;
         let mut deprecations = vec![];
-        let mut resolutions = vec![];
-        let mut fixes = vec![];
+        let mut fixes = BTreeMap::new();
+        let mut resolutions = BTreeMap::new();
         let mut errors = vec![];
         for advisory in advisories {
             if advisory.id().contains(" (deprecation)") {
@@ -68,21 +68,16 @@ impl Gnarl {
                 for request in resolution.requests() {
                     let original_request = resolution.original(request)?;
                     if let Some(fix) = get_fix(packument, advisory.vulnerable_versions(), request) {
-                        fixes.push(format!(
-                            "\"{}@{}\": \"^{}\",",
-                            advisory.module_name(),
-                            original_request,
-                            fix
-                        ));
+                        add_fix(&mut fixes, advisory.module_name(), original_request, fix);
                     } else if let Some(fix) =
                         get_resolution(packument, advisory.vulnerable_versions(), request)
                     {
-                        resolutions.push(format!(
-                            "\"{}@{}\": \"^{}\",",
+                        add_fix(
+                            &mut resolutions,
                             advisory.module_name(),
                             original_request,
-                            fix
-                        ));
+                            fix,
+                        );
                     } else {
                         errors.push(format!(
                             "\"{}@{}\"",
@@ -94,9 +89,23 @@ impl Gnarl {
             }
         }
 
+        fixes.retain(|key, _| !resolutions.contains_key(key));
+
         print_section("Deprecations", deprecations);
-        print_section("Fixes", fixes);
-        print_section("Resolutions", resolutions);
+        print_section(
+            "Fixes",
+            fixes
+                .iter()
+                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
+                .collect(),
+        );
+        print_section(
+            "Resolutions",
+            resolutions
+                .iter()
+                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
+                .collect(),
+        );
         print_section("Unresolved issues", errors);
 
         Ok(())
@@ -261,4 +270,19 @@ fn print_section(title: &str, mut lines: Vec<String>) {
     for line in lines {
         println!("    {}", line);
     }
+}
+
+fn add_fix(
+    map: &mut BTreeMap<String, Version>,
+    package: &str,
+    request: &str,
+    resolution: &Version,
+) {
+    map.entry(format!("{}@{}", package, request))
+        .and_modify(|v| {
+            if (*v).lt(resolution) {
+                *v = resolution.to_owned();
+            }
+        })
+        .or_insert(resolution.to_owned());
 }

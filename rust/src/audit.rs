@@ -41,6 +41,7 @@ pub struct Advisory {
     severity: Severity,
     vulnerable_versions: Range,
     tree_versions: Vec<Version>,
+    #[allow(unused)]
     dependents: Vec<Package>,
 }
 
@@ -112,6 +113,7 @@ impl Advisory {
         &self.tree_versions
     }
 
+    #[allow(unused)]
     pub fn dependents(&self) -> &[Package] {
         &self.dependents
     }
