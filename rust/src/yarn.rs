@@ -2,6 +2,7 @@ use crate::{
     Error,
     audit::Advisory,
     lock::Lock,
+    out_fix, out_yarn,
     package::{Dependency, Resolution},
     parse,
     project::Project,
@@ -52,13 +53,13 @@ impl Yarn {
     }
 
     pub fn print_info(&self) {
-        println!("# resolutions: {:11}", self.project.resolutions().len());
-        println!("# dependencies: {:10}", self.project.dependencies().len());
-        println!(
+        out_yarn!("# resolutions: {:11}", self.project.resolutions().len());
+        out_yarn!("# dependencies: {:10}", self.project.dependencies().len());
+        out_yarn!(
             "# dev dependencies: {:6}",
             self.project.dev_dependencies().len()
         );
-        println!("# lock entries: {:10}", self.lock.len());
+        out_yarn!("# lock entries: {:10}", self.lock.len());
     }
 
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
@@ -68,19 +69,13 @@ impl Yarn {
             &self.yarn_path
         };
         let name = if prefer_aikido && self.aikido_path.is_some() {
-            AIKIDO_YARN_NAME
+            "aikido install"
+        } else if args.len() > 1 {
+            "audit"
         } else {
-            YARN_NAME
+            args[0]
         };
-        println!(
-            "{} {}",
-            name,
-            args.iter()
-                .take_while(|arg| !arg.starts_with("-"))
-                .map(|arg| arg.to_string())
-                .collect::<Vec<String>>()
-                .join(" ")
-        );
+        out_yarn!("{}", name);
         let output = Command::new(executable).args(args).output()?;
         if !output.status.success() && output.stdout.is_empty() {
             return Err(String::from_utf8_lossy(&output.stderr).to_string().into());
@@ -130,6 +125,7 @@ impl Yarn {
 
     pub fn reset_resolutions(&mut self) -> Result<bool, Error> {
         let mut dirty = false;
+        let resolutions = self.lock.all_resolutions()?;
         for (package, requested) in self.project.resolutions() {
             if parse::parse_range(&requested).is_err() {
                 continue;
@@ -137,14 +133,15 @@ impl Yarn {
 
             let (name, tail) = parse::split_name(&package).unwrap_or((&package, "*"));
             let range = parse::parse_range(tail)?;
-            let resolutions = self.lock.all_resolutions()?;
-            if !resolutions.iter().any(|resolution| {
-                resolution
-                    .dependencies()
-                    .iter()
-                    .any(|dependency| dependency.name() == name && range.eq(dependency.request()))
-            }) {
-                println!("Drop resolution for {}", package);
+            let requested_range = parse::parse_range(&requested)?;
+            if range.intersect(&requested_range).is_some()
+                || !resolutions.iter().any(|resolution| {
+                    resolution.dependencies().iter().any(|dependency| {
+                        dependency.name() == name && range.eq(dependency.request())
+                    })
+                })
+            {
+                out_fix!("drop resolution for {}", package);
                 self.project.reset_resolution(&package);
                 dirty = true;
             }

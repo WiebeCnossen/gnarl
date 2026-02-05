@@ -4,7 +4,7 @@ use nodejs_semver::{Range, Version};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
-use crate::parse;
+use crate::{out_npm, parse};
 
 #[derive(Deserialize)]
 pub struct PackumentVersionDto {
@@ -113,6 +113,7 @@ impl Npm {
             return Ok(());
         }
 
+        out_npm!("query {}", package);
         let url = format!("https://registry.npmjs.org/{}", package);
         let response = self.client.get(&url).send()?.error_for_status()?;
         let packument: PackumentDto = serde_json::from_reader(response)?;

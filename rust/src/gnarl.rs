@@ -7,6 +7,7 @@ use crate::{
     audit::Advisory,
     cmd::Options,
     npm::{Npm, Packument},
+    out_indent, out_info,
     package::Dependency,
     parse,
     yarn::Yarn,
@@ -67,7 +68,12 @@ impl Gnarl {
                     .ok_or_else(|| format!("Resolution for {} not found", tree_version))?;
                 for request in resolution.requests() {
                     let original_request = resolution.original(request)?;
-                    if let Some(fix) = get_fix(packument, advisory.vulnerable_versions(), request) {
+                    if let Some(fix) = get_fix(
+                        packument,
+                        advisory.vulnerable_versions(),
+                        advisory.tree_versions().last().unwrap(),
+                        request,
+                    ) {
                         add_fix(&mut fixes, advisory.module_name(), original_request, fix);
                     } else if let Some(fix) =
                         get_resolution(packument, advisory.vulnerable_versions(), request)
@@ -91,22 +97,22 @@ impl Gnarl {
 
         fixes.retain(|key, _| !resolutions.contains_key(key));
 
-        print_section("Deprecations", deprecations);
+        print_section("deprecations", deprecations);
         print_section(
-            "Fixes",
+            "fixes",
             fixes
                 .iter()
                 .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
                 .collect(),
         );
         print_section(
-            "Resolutions",
+            "resolutions",
             resolutions
                 .iter()
                 .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
                 .collect(),
         );
-        print_section("Unresolved issues", errors);
+        print_section("unresolved issues", errors);
 
         Ok(())
     }
@@ -125,13 +131,8 @@ impl Gnarl {
     pub fn auto(&mut self) -> Result<(), Error> {
         let _: () = loop {
             let mut yarn = Yarn::new()?;
-            loop {
-                yarn.install()?;
-                yarn.dedupe()?;
-                if !yarn.reset_resolutions()? {
-                    break;
-                }
-            }
+            yarn.install()?;
+            yarn.dedupe()?;
 
             let mut dirty = false;
             let mut advisories = yarn.audit()?;
@@ -147,6 +148,8 @@ impl Gnarl {
                 break;
             }
         };
+
+        Yarn::new()?.reset_resolutions()?;
         self.check()
     }
 
@@ -159,17 +162,35 @@ impl Gnarl {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
         let mut resets = HashSet::new();
-
-        for dependent in yarn.dependents(advisory.module_name())? {
+        let mut fixable = false;
+        let mut blocked = false;
+        for dependent in yarn.dependents(advisory.module_name())?.iter() {
+            let tree_version = match advisory
+                .tree_versions()
+                .iter()
+                .rfind(|v| v.satisfies(dependent.request()))
+            {
+                Some(v) => v,
+                None => continue,
+            };
             if has_fix(
                 &packument,
                 advisory.vulnerable_versions(),
+                tree_version,
                 dependent.request(),
             ) {
-                resets.insert(advisory.module_name().to_owned());
-            } else if dependent.source() == "npm" {
-                advisories.push(self.create_advisory(yarn, &advisory, &dependent)?);
+                fixable = true;
+                continue;
             }
+
+            blocked = true;
+            if dependent.source() == "npm" {
+                advisories.push(self.create_advisory(yarn, &advisory, dependent)?);
+            }
+        }
+
+        if fixable && !blocked {
+            resets.insert(advisory.module_name().to_owned());
         }
 
         let mut dirty = false;
@@ -234,18 +255,26 @@ impl Gnarl {
     }
 }
 
-fn has_fix(packument: &Packument, vulnerable_versions: &Range, request: &Range) -> bool {
-    get_fix(packument, vulnerable_versions, request).is_some()
+fn has_fix(
+    packument: &Packument,
+    vulnerable_versions: &Range,
+    tree_version: &Version,
+    request: &Range,
+) -> bool {
+    get_fix(packument, vulnerable_versions, tree_version, request).is_some()
 }
 
 fn get_fix<'a>(
     packument: &'a Packument,
     vulnerable_versions: &Range,
+    tree_version: &Version,
     request: &Range,
 ) -> Option<&'a Version> {
-    packument
-        .versions()
-        .find(|version| request.satisfies(version) && !vulnerable_versions.satisfies(version))
+    packument.versions().find(|version| {
+        tree_version.lt(version)
+            && request.satisfies(version)
+            && !vulnerable_versions.satisfies(version)
+    })
 }
 
 fn get_resolution<'a>(
@@ -264,11 +293,11 @@ fn print_section(title: &str, mut lines: Vec<String>) {
         return;
     }
 
-    println!("{}:", title);
+    out_info!("{}", title);
     lines.sort_unstable();
     lines.dedup();
     for line in lines {
-        println!("    {}", line);
+        out_indent!("{}", line);
     }
 }
 

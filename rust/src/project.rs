@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs::File,
     io::{BufWriter, Write},
     path::PathBuf,
@@ -57,7 +57,7 @@ impl Project {
         self.get_string_map("devDependencies").collect()
     }
 
-    pub fn resolutions(&self) -> HashMap<String, String> {
+    pub fn resolutions(&self) -> BTreeMap<String, String> {
         self.get_string_map("resolutions").collect()
     }
 

@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use crate::{
-    Package,
+    Package, out_fix,
     package::{Dependency, Resolution},
     parse,
 };
@@ -14,7 +14,7 @@ struct YarnLockV2 {
     metadata: Option<Value>, // or your struct if you know the shape
     // The rest is package@spec → mapping of version, resolution, etc.
     #[serde(flatten)]
-    packages: HashMap<String, Value>,
+    packages: BTreeMap<String, Value>,
 }
 
 pub struct Lock {
@@ -46,7 +46,7 @@ impl Lock {
             return false;
         }
 
-        println!("Reset {}", package);
+        out_fix!("reset {}", package);
         true
     }
 

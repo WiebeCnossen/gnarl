@@ -7,6 +7,7 @@ mod npm;
 mod package;
 mod parse;
 mod project;
+mod ux;
 mod yarn;
 
 use std::env;
@@ -40,13 +41,13 @@ fn main() -> Result<(), Error> {
         }
 
         Help => {
-            println!("gnarl {} - the yarn v4 companion tool", VERSION);
-            println!("usage: gnarl [<auto | reset | check | info | help> <args>]");
-            println!("> gnarl [auto] [-n]");
-            println!("> gnarl reset [-n] package-names...");
-            println!("> gnarl check");
-            println!("> gnarl info");
-            println!("> gnarl help");
+            out_info!("gnarl {} - the yarn v4 companion tool", VERSION);
+            out_indent!("usage: gnarl [<auto | reset | check | info | help> <args>]");
+            out_indent!("> gnarl [auto] [-n]");
+            out_indent!("> gnarl reset [-n] package-names...");
+            out_indent!("> gnarl check");
+            out_indent!("> gnarl info");
+            out_indent!("> gnarl help");
         }
 
         Info => {
