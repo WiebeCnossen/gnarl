@@ -23,6 +23,7 @@ pub fn split_last<'a>(
 pub fn split_name(reference: &str) -> Result<(&str, &str), crate::Error> {
     let (name, tail) = split_last("name", reference, "@")?;
     match name.chars().filter(|&c| c == '@').count() {
+        _ if name.is_empty() || tail.is_empty() => Err(format!("No name in {}", reference).into()),
         0 => Ok((name, tail)),
         1 if name.starts_with("@") => Ok((name, tail)),
         _ => {

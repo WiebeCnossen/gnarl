@@ -17,12 +17,16 @@ use crate::{
 pub struct Gnarl {
     options: Options,
     npm: Npm,
+    reset: HashSet<String>,
 }
 
 impl Gnarl {
     pub fn new(options: Options) -> Result<Self, Error> {
-        let npm = Npm::new()?;
-        Ok(Self { options, npm })
+        Ok(Self {
+            options,
+            npm: Npm::new()?,
+            reset: HashSet::new(),
+        })
     }
 
     pub fn check(&mut self) -> Result<(), Error> {
@@ -124,6 +128,8 @@ impl Gnarl {
     }
 
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<(), Error> {
+        self.reset
+            .extend(packages.iter().map(|p| p.as_ref().to_string()));
         let dirty = Yarn::new()?.locks()?.reset(packages)?;
 
         if dirty && !self.options.no_install() {
@@ -140,18 +146,27 @@ impl Gnarl {
             yarn.dedupe()?;
 
             let mut dirty = false;
+            let mut resets = vec![];
             let mut advisories = yarn.audit()?;
             out_info!("{} advisories", advisories.len());
             let mut done = HashSet::new();
 
             while let Some(advisory) = advisories.pop() {
-                if done.insert(format!("{} {}", advisory.id(), advisory.module_name())) {
-                    dirty = self.fix(&mut yarn, advisory, &mut advisories)? || dirty;
+                if done.insert(format!("{} {}", advisory.id(), advisory.module_name()))
+                    && self.fix(&mut yarn, &advisory, &mut advisories)?
+                {
+                    dirty = true;
+                    resets.push(advisory.module_name().to_owned());
                 }
             }
 
             if !dirty || self.options.no_install() {
                 break;
+            }
+
+            if !resets.is_empty() {
+                yarn.locks()?.reset(&resets)?;
+                self.reset.extend(resets);
             }
         };
 
@@ -162,12 +177,11 @@ impl Gnarl {
     fn fix(
         &mut self,
         yarn: &mut Yarn,
-        advisory: Advisory,
+        advisory: &Advisory,
         advisories: &mut Vec<Advisory>,
     ) -> Result<bool, Error> {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
-        let mut resets = HashSet::new();
         let mut fixable = false;
         let mut blocked = false;
         let locks = yarn.locks()?;
@@ -192,16 +206,45 @@ impl Gnarl {
 
             blocked = true;
             if dependent.source() == "npm" {
-                advisories.push(self.create_advisory(yarn, &advisory, dependent)?);
+                advisories.push(
+                    self.create_advisory(
+                        yarn,
+                        advisory,
+                        dependent,
+                        advisory
+                            .root_name()
+                            .unwrap_or(advisory.module_name())
+                            .to_owned(),
+                    )?,
+                );
+            } else {
+                out_info!(
+                    "{} blocked by {}@{}",
+                    advisory.root_name().unwrap_or(advisory.module_name()),
+                    advisory.module_name(),
+                    tree_version
+                );
             }
         }
 
-        if fixable && !blocked {
-            resets.insert(advisory.module_name().to_owned());
+        if fixable && !blocked && !self.reset.contains(advisory.module_name()) {
+            return Ok(true);
         }
 
-        if yarn.locks()?.reset(&resets.iter().collect::<Vec<_>>())? {
-            return Ok(true);
+        if advisory.root_name().is_none()
+            && !advisory.id().contains(" (deprecation)")
+            && !has_fix(
+                &packument,
+                advisory.vulnerable_versions(),
+                advisory.tree_versions().last().unwrap(),
+                &parse::parse_range("*")?,
+            )
+        {
+            out_info!(
+                "{}@{} has no fix",
+                advisory.module_name(),
+                advisory.vulnerable_versions()
+            );
         }
 
         Ok(false)
@@ -212,6 +255,7 @@ impl Gnarl {
         yarn: &Yarn,
         advisory: &Advisory,
         dependent: &Dependency,
+        root_name: String,
     ) -> Result<Advisory, Error> {
         self.npm.retrieve_packument(dependent.name())?;
         let packument = self.npm.packument(dependent.name())?;
@@ -245,6 +289,7 @@ impl Gnarl {
             parse::parse_range(&vulnerable_versions)?,
             tree_versions,
             vec![],
+            Some(root_name),
         ))
     }
 }

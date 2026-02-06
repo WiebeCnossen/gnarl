@@ -43,6 +43,7 @@ pub struct Advisory {
     tree_versions: Vec<Version>,
     #[allow(unused)]
     dependents: Vec<Package>,
+    root_name: Option<String>,
 }
 
 impl TryFrom<AuditDto> for Advisory {
@@ -65,6 +66,7 @@ impl TryFrom<AuditDto> for Advisory {
                 .iter()
                 .map(|d| Package::try_from(d.to_owned()))
                 .collect::<Result<Vec<Package>, crate::Error>>()?,
+            root_name: None,
         })
     }
 }
@@ -77,6 +79,7 @@ impl Advisory {
         vulnerable_versions: Range,
         tree_versions: Vec<Version>,
         dependents: Vec<Package>,
+        root_name: Option<String>,
     ) -> Self {
         Self {
             id,
@@ -85,6 +88,7 @@ impl Advisory {
             vulnerable_versions,
             tree_versions,
             dependents,
+            root_name,
         }
     }
 
@@ -116,5 +120,9 @@ impl Advisory {
     #[allow(unused)]
     pub fn dependents(&self) -> &[Package] {
         &self.dependents
+    }
+
+    pub fn root_name(&self) -> Option<&str> {
+        self.root_name.as_deref()
     }
 }
