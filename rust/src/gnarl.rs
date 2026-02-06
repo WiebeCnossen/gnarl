@@ -5,6 +5,7 @@ use nodejs_semver::{OutsideDirection, Range, Version};
 use crate::{
     Error,
     audit::Advisory,
+    check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
     out_indent, out_info,
@@ -16,17 +17,12 @@ use crate::{
 pub struct Gnarl {
     options: Options,
     npm: Npm,
-    reset: HashSet<String>,
 }
 
 impl Gnarl {
     pub fn new(options: Options) -> Result<Self, Error> {
         let npm = Npm::new()?;
-        Ok(Self {
-            options,
-            npm,
-            reset: HashSet::new(),
-        })
+        Ok(Self { options, npm })
     }
 
     pub fn check(&mut self) -> Result<(), Error> {
@@ -54,7 +50,7 @@ impl Gnarl {
 
             self.npm.retrieve_packument(advisory.module_name())?;
             let packument = self.npm.packument(advisory.module_name())?;
-            let yarn_resolutions = yarn.resolutions(advisory.module_name())?;
+            let yarn_resolutions = yarn.locks()?.for_package(advisory.module_name())?;
             for tree_version in advisory.tree_versions() {
                 let resolution = yarn_resolutions
                     .iter()
@@ -97,6 +93,16 @@ impl Gnarl {
 
         fixes.retain(|key, _| !resolutions.contains_key(key));
 
+        Kpis::new(
+            yarn.len_dependencies(),
+            yarn.len_dev_dependencies(),
+            yarn.locks()?.len(),
+            yarn.len_resolutions(),
+            deprecations.len(),
+            fixes.len() + resolutions.len() + errors.len(),
+        )
+        .print();
+
         print_section("deprecations", deprecations);
         print_section(
             "fixes",
@@ -118,8 +124,7 @@ impl Gnarl {
     }
 
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<(), Error> {
-        let mut yarn = Yarn::new()?;
-        let dirty = yarn.reset(packages)?;
+        let dirty = Yarn::new()?.locks()?.reset(packages)?;
 
         if dirty && !self.options.no_install() {
             self.auto()?;
@@ -136,6 +141,7 @@ impl Gnarl {
 
             let mut dirty = false;
             let mut advisories = yarn.audit()?;
+            out_info!("{} advisories", advisories.len());
             let mut done = HashSet::new();
 
             while let Some(advisory) = advisories.pop() {
@@ -164,7 +170,8 @@ impl Gnarl {
         let mut resets = HashSet::new();
         let mut fixable = false;
         let mut blocked = false;
-        for dependent in yarn.dependents(advisory.module_name())?.iter() {
+        let locks = yarn.locks()?;
+        for dependent in locks.dependents(advisory.module_name())?.iter() {
             let tree_version = match advisory
                 .tree_versions()
                 .iter()
@@ -193,25 +200,11 @@ impl Gnarl {
             resets.insert(advisory.module_name().to_owned());
         }
 
-        let mut dirty = false;
-        for reset in resets.iter() {
-            dirty = self.reset_one(yarn, reset)? || dirty;
-        }
-
-        if dirty {
+        if yarn.locks()?.reset(&resets.iter().collect::<Vec<_>>())? {
             return Ok(true);
         }
 
         Ok(false)
-    }
-
-    fn reset_one(&mut self, yarn: &mut Yarn, name: &str) -> Result<bool, Error> {
-        if self.reset.insert(name.to_owned()) {
-            yarn.reset(&[name])?;
-            Ok(true)
-        } else {
-            Ok(false)
-        }
     }
 
     fn create_advisory(
@@ -223,7 +216,8 @@ impl Gnarl {
         self.npm.retrieve_packument(dependent.name())?;
         let packument = self.npm.packument(dependent.name())?;
         let tree_versions = yarn
-            .resolutions(dependent.name())?
+            .locks()?
+            .for_package(dependent.name())?
             .iter()
             .flat_map(|resolution| resolution.package().version())
             .cloned()

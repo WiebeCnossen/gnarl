@@ -30,10 +30,12 @@ macro_rules! out_fix {
 
 #[macro_export]
 macro_rules! out_npm {
-    ($($arg:tt)*) => {{
-        // print!("[NPM?] ");
-        // println!($($arg)*);
-    }};
+    ($($arg:tt)*) => {
+        {
+            print!("[NPM?] ");
+            println!($($arg)*);
+        }
+    };
 }
 
 #[macro_export]

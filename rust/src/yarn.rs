@@ -1,12 +1,4 @@
-use crate::{
-    Error,
-    audit::Advisory,
-    lock::Lock,
-    out_fix, out_yarn,
-    package::{Dependency, Resolution},
-    parse,
-    project::Project,
-};
+use crate::{Error, audit::Advisory, locks::Locks, out_fix, out_yarn, parse, project::Project};
 use std::{
     path::PathBuf,
     process::{Command, Output},
@@ -18,8 +10,8 @@ const YARN_NAME: &str = "yarn";
 pub struct Yarn {
     aikido_path: Option<PathBuf>,
     yarn_path: PathBuf,
+    lock_path: PathBuf,
     project: Project,
-    lock: Lock,
 }
 
 const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
@@ -42,24 +34,24 @@ impl Yarn {
             return Err(LOCK_NOT_FOUND.into());
         }
 
-        let lock = Lock::read(lock_path)?;
-
         Ok(Self {
             aikido_path,
             yarn_path,
+            lock_path,
             project,
-            lock,
         })
     }
 
-    pub fn print_info(&self) {
-        out_yarn!("# resolutions: {:11}", self.project.resolutions().len());
-        out_yarn!("# dependencies: {:10}", self.project.dependencies().len());
-        out_yarn!(
-            "# dev dependencies: {:6}",
-            self.project.dev_dependencies().len()
-        );
-        out_yarn!("# lock entries: {:10}", self.lock.len());
+    pub fn len_dependencies(&self) -> usize {
+        self.project.dependencies().len()
+    }
+
+    pub fn len_dev_dependencies(&self) -> usize {
+        self.project.dev_dependencies().len()
+    }
+
+    pub fn len_resolutions(&self) -> usize {
+        self.project.resolutions().len()
     }
 
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
@@ -101,31 +93,13 @@ impl Yarn {
         Ok(advisories)
     }
 
-    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
-        let mut dirty = false;
-        for package in packages {
-            dirty = self.lock.reset(package.as_ref()) || dirty;
-        }
-
-        if !dirty {
-            return Ok(false);
-        }
-
-        self.lock.save()?;
-        Ok(true)
-    }
-
-    pub fn dependents(&self, name: impl AsRef<str>) -> Result<Vec<Dependency>, Error> {
-        self.lock.dependents(name.as_ref())
-    }
-
-    pub fn resolutions(&self, name: impl AsRef<str>) -> Result<Vec<Resolution>, Error> {
-        self.lock.resolutions(name.as_ref())
+    pub fn locks(&self) -> Result<Locks, Error> {
+        Locks::read(self.lock_path.clone())
     }
 
     pub fn reset_resolutions(&mut self) -> Result<bool, Error> {
         let mut dirty = false;
-        let resolutions = self.lock.all_resolutions()?;
+        let resolutions = self.locks()?.all()?;
         for (package, requested) in self.project.resolutions() {
             if parse::parse_range(&requested).is_err() {
                 continue;

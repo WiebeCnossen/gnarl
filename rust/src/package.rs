@@ -40,57 +40,6 @@ impl TryFrom<String> for Package {
     }
 }
 
-pub struct Resolution {
-    package: Package,
-    requests: Vec<Range>,
-    original_requests: Vec<String>,
-    dependencies: Vec<Dependency>,
-}
-
-impl Resolution {
-    pub fn new(
-        package: Package,
-        requests: Vec<Range>,
-        original_requests: Vec<String>,
-        dependencies: Vec<Dependency>,
-    ) -> Self {
-        Self {
-            package,
-            requests,
-            original_requests,
-            dependencies,
-        }
-    }
-
-    pub fn package(&self) -> &Package {
-        &self.package
-    }
-
-    pub fn requests(&self) -> &[Range] {
-        &self.requests
-    }
-
-    pub fn original(&self, request: &Range) -> Result<&str, crate::Error> {
-        self.original_requests
-            .iter()
-            .find(|original_request| {
-                if let Ok(parsed) = parse::parse_range(original_request)
-                    && parsed.eq(request)
-                {
-                    true
-                } else {
-                    false
-                }
-            })
-            .map(|original_request| original_request.as_str())
-            .ok_or_else(|| format!("Original request for {} not found", request).into())
-    }
-
-    pub fn dependencies(&self) -> &[Dependency] {
-        &self.dependencies
-    }
-}
-
 pub struct Dependency {
     name: String,
     source: String,

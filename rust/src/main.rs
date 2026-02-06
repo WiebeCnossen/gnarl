@@ -1,8 +1,9 @@
 mod audit;
+mod check;
 mod cmd;
 mod error;
 mod gnarl;
-mod lock;
+mod locks;
 mod npm;
 mod package;
 mod parse;
@@ -14,7 +15,6 @@ use std::env;
 
 use crate::cmd::{Command, Verb::*};
 use crate::gnarl::Gnarl;
-use crate::yarn::Yarn;
 
 pub use error::Error;
 pub use package::Package;
@@ -51,8 +51,7 @@ fn main() -> Result<(), Error> {
         }
 
         Info => {
-            let yarn = Yarn::new()?;
-            yarn.print_info();
+            out_info!("");
         }
     };
 

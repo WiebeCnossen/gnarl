@@ -1,12 +1,10 @@
+use crate::Error;
+use nodejs_semver::Range;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
-use crate::{
-    Package, out_fix,
-    package::{Dependency, Resolution},
-    parse,
-};
+use crate::{Package, out_fix, package::Dependency, parse};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct YarnLockV2 {
@@ -17,20 +15,20 @@ struct YarnLockV2 {
     packages: BTreeMap<String, Value>,
 }
 
-pub struct Lock {
+pub struct Locks {
     path: PathBuf,
     root: YarnLockV2,
 }
 
-impl Lock {
-    pub fn read(path: PathBuf) -> Result<Self, crate::Error> {
+impl Locks {
+    pub fn read(path: PathBuf) -> Result<Self, Error> {
         let content = fs::read_to_string(&path)?;
         let root: YarnLockV2 = serde_yaml::from_str(&content)?;
 
         Ok(Self { path, root })
     }
 
-    pub fn reset(&mut self, package: &str) -> bool {
+    fn reset_one(&mut self, package: &str) -> bool {
         let len = self.root.packages.len();
         self.root.packages.retain(|k, _| {
             if let Some(tail) = k.strip_prefix(package)
@@ -50,21 +48,21 @@ impl Lock {
         true
     }
 
-    pub fn save(&self) -> Result<(), crate::Error> {
+    fn save(&self) -> Result<(), Error> {
         let content = serde_yaml::to_string(&self.root)?;
         fs::write(&self.path, content)?;
         Ok(())
     }
 
-    pub fn resolutions(&self, package: &str) -> Result<Vec<Resolution>, crate::Error> {
+    pub fn for_package(&self, package: &str) -> Result<Vec<Lock>, Error> {
         Ok(self
-            .all_resolutions()?
+            .all()?
             .into_iter()
-            .filter(|resolution| resolution.package().name() == package)
+            .filter(|lock| lock.package().name() == package)
             .collect())
     }
 
-    pub fn all_resolutions(&self) -> Result<Vec<Resolution>, crate::Error> {
+    pub fn all(&self) -> Result<Vec<Lock>, Error> {
         self.root
             .packages
             .iter()
@@ -115,23 +113,23 @@ impl Lock {
                                     range.as_str().unwrap(),
                                 )
                             })
-                            .collect::<Result<Vec<Dependency>, crate::Error>>()?
+                            .collect::<Result<Vec<Dependency>, Error>>()?
                     } else {
                         Vec::new()
                     };
 
-                Ok(Resolution::new(
+                Ok(Lock::new(
                     package,
                     requests,
                     original_requests,
                     dependencies,
                 ))
             })
-            .collect::<Result<Vec<Resolution>, crate::Error>>()
+            .collect::<Result<Vec<Lock>, Error>>()
     }
 
-    pub fn dependents(&self, package_name: &str) -> Result<Vec<Dependency>, crate::Error> {
-        let resolutions = self.all_resolutions()?;
+    pub fn dependents(&self, package_name: &str) -> Result<Vec<Dependency>, Error> {
+        let resolutions = self.all()?;
         let dependents = resolutions
             .into_iter()
             .flat_map(|resolution| {
@@ -154,5 +152,70 @@ impl Lock {
 
     pub fn len(&self) -> usize {
         self.root.packages.len()
+    }
+
+    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
+        let mut dirty = false;
+        for package in packages {
+            dirty = self.reset_one(package.as_ref()) || dirty;
+        }
+
+        if !dirty {
+            return Ok(false);
+        }
+
+        self.save()?;
+        Ok(true)
+    }
+}
+
+pub struct Lock {
+    package: Package,
+    requests: Vec<Range>,
+    original_requests: Vec<String>,
+    dependencies: Vec<Dependency>,
+}
+
+impl Lock {
+    pub fn new(
+        package: Package,
+        requests: Vec<Range>,
+        original_requests: Vec<String>,
+        dependencies: Vec<Dependency>,
+    ) -> Self {
+        Self {
+            package,
+            requests,
+            original_requests,
+            dependencies,
+        }
+    }
+
+    pub fn package(&self) -> &Package {
+        &self.package
+    }
+
+    pub fn requests(&self) -> &[Range] {
+        &self.requests
+    }
+
+    pub fn original(&self, request: &Range) -> Result<&str, Error> {
+        self.original_requests
+            .iter()
+            .find(|original_request| {
+                if let Ok(parsed) = parse::parse_range(original_request)
+                    && parsed.eq(request)
+                {
+                    true
+                } else {
+                    false
+                }
+            })
+            .map(|original_request| original_request.as_str())
+            .ok_or_else(|| format!("Original request for {} not found", request).into())
+    }
+
+    pub fn dependencies(&self) -> &[Dependency] {
+        &self.dependencies
     }
 }
