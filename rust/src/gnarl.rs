@@ -30,7 +30,7 @@ impl Gnarl {
     }
 
     pub fn check(&mut self) -> Result<(), Error> {
-        let yarn = Yarn::new()?;
+        let yarn = Yarn::new(self.options.severity())?;
 
         let advisories = yarn.audit()?;
         let mut deprecations = vec![];
@@ -130,7 +130,9 @@ impl Gnarl {
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<(), Error> {
         self.reset
             .extend(packages.iter().map(|p| p.as_ref().to_string()));
-        let dirty = Yarn::new()?.locks()?.reset(packages)?;
+        let dirty = Yarn::new(self.options.severity())?
+            .locks()?
+            .reset(packages)?;
 
         if dirty && !self.options.no_install() {
             self.auto()?;
@@ -141,7 +143,7 @@ impl Gnarl {
 
     pub fn auto(&mut self) -> Result<(), Error> {
         let _: () = loop {
-            let mut yarn = Yarn::new()?;
+            let mut yarn = Yarn::new(self.options.severity())?;
             yarn.install()?;
             yarn.dedupe()?;
 
@@ -170,7 +172,7 @@ impl Gnarl {
             }
         };
 
-        Yarn::new()?.reset_resolutions()?;
+        Yarn::new(self.options.severity())?.reset_resolutions()?;
         self.check()
     }
 

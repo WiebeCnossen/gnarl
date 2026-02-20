@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use nodejs_semver::{Range, Version};
 use serde::Deserialize;
 
@@ -11,6 +13,8 @@ struct AuditDto {
 
 #[derive(Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Severity {
+    #[serde(rename = "info")]
+    Info,
     #[serde(rename = "low")]
     Low,
     #[serde(rename = "moderate")]
@@ -19,6 +23,36 @@ pub enum Severity {
     High,
     #[serde(rename = "critical")]
     Critical,
+}
+
+impl FromStr for Severity {
+    type Err = crate::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "info" => Severity::Info,
+            "low" => Severity::Low,
+            "moderate" => Severity::Moderate,
+            "high" => Severity::High,
+            "critical" => Severity::Critical,
+            _ => return Err(format!("invalid severity: {}", s).into()),
+        })
+    }
+}
+
+impl std::fmt::Display for Severity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Severity::Info => "info",
+                Severity::Low => "low",
+                Severity::Moderate => "moderate",
+                Severity::High => "high",
+                Severity::Critical => "critical",
+            }
+        )
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]

@@ -1,4 +1,10 @@
-use crate::{Error, audit::Advisory, locks::Locks, out_fix, out_yarn, parse, project::Project};
+use crate::{
+    Error,
+    audit::{Advisory, Severity},
+    locks::Locks,
+    out_fix, out_yarn, parse,
+    project::Project,
+};
 use std::{
     path::PathBuf,
     process::{Command, Output},
@@ -12,13 +18,14 @@ pub struct Yarn {
     yarn_path: PathBuf,
     lock_path: PathBuf,
     project: Project,
+    severity: Severity,
 }
 
 const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
 const LOCK_NOT_FOUND: &str = "yarn.lock not found in current directory";
 
 impl Yarn {
-    pub fn new() -> Result<Self, Error> {
+    pub fn new(severity: Severity) -> Result<Self, Error> {
         let aikido_path = which::which(AIKIDO_YARN_NAME).ok();
         let yarn_path = which::which(YARN_NAME)?;
 
@@ -39,6 +46,7 @@ impl Yarn {
             yarn_path,
             lock_path,
             project,
+            severity,
         })
     }
 
@@ -84,7 +92,17 @@ impl Yarn {
     }
 
     pub fn audit(&self) -> Result<Vec<Advisory>, Error> {
-        let output = self.run(false, &["npm", "audit", "--json", "--recursive"])?;
+        let output = self.run(
+            false,
+            &[
+                "npm",
+                "audit",
+                "--json",
+                "--recursive",
+                "--severity",
+                self.severity.to_string().as_str(),
+            ],
+        )?;
         let stdout_str = String::from_utf8(output.stdout)?;
         let advisories: Vec<Advisory> = stdout_str
             .lines()

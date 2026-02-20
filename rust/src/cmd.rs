@@ -1,25 +1,44 @@
 use std::env::Args;
 
+use crate::audit::Severity;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     no_install: bool,
+    severity: Severity,
 }
 
 impl Options {
-    fn read(mut args: Vec<String>) -> (Self, Vec<String>) {
+    fn read(args: &mut Vec<String>) -> Result<Self, crate::Error> {
         let mut no_install = false;
+        let mut severity = Severity::Info;
         for i in (0..args.len()).rev() {
-            if args[i] == "-x" {
-                no_install = true;
-                args.remove(i);
+            match args[i].as_str() {
+                "-x" => {
+                    no_install = true;
+                    args.remove(i);
+                }
+                "-s" => {
+                    severity = args[i + 1].parse()?;
+                    args.remove(i);
+                    args.remove(i);
+                }
+                _ => {}
             }
         }
 
-        (Self { no_install }, args)
+        Ok(Self {
+            no_install,
+            severity,
+        })
     }
 
     pub fn no_install(&self) -> bool {
         self.no_install
+    }
+
+    pub fn severity(&self) -> Severity {
+        self.severity
     }
 }
 
@@ -55,7 +74,8 @@ impl Command {
 impl TryFrom<Args> for Command {
     type Error = crate::Error;
     fn try_from(args: Args) -> Result<Self, Self::Error> {
-        let (options, mut parameters) = Options::read(args.skip(1).collect());
+        let mut parameters = args.skip(1).collect::<Vec<String>>();
+        let options = Options::read(&mut parameters)?;
 
         if parameters.is_empty() {
             return Ok(Self {
