@@ -8,7 +8,7 @@ use crate::{
     check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
-    out_indent, out_info,
+    out_hit, out_indent, out_info,
     package::Dependency,
     parse,
     yarn::Yarn,
@@ -37,6 +37,15 @@ impl Gnarl {
         let mut fixes = BTreeMap::new();
         let mut resolutions = BTreeMap::new();
         let mut errors = vec![];
+        for advisory in &advisories {
+            out_hit!(
+                "{}: {}@{}",
+                advisory.severity(),
+                advisory.module_name(),
+                advisory.vulnerable_versions()
+            );
+        }
+
         for advisory in advisories {
             if advisory.id().contains(" (deprecation)") {
                 deprecations.push(format!(

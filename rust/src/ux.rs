@@ -9,6 +9,16 @@ macro_rules! out_yarn {
 }
 
 #[macro_export]
+macro_rules! out_hit {
+    ($($arg:tt)*) => {
+        {
+            print!("[HIT#] ");
+            println!($($arg)*);
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! out_info {
     ($($arg:tt)*) => {
         {
