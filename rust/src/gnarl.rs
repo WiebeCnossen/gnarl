@@ -40,14 +40,14 @@ impl Gnarl {
         for advisory in &advisories {
             out_hit!(
                 "{}: {}@{}",
-                advisory.severity(),
+                advisory.label(),
                 advisory.module_name(),
                 advisory.vulnerable_versions()
             );
         }
 
         for advisory in advisories {
-            if advisory.id().contains(" (deprecation)") {
+            if advisory.is_deprecation() {
                 deprecations.push(format!(
                     "\"{}@{}\"",
                     advisory.module_name(),
@@ -243,7 +243,7 @@ impl Gnarl {
         }
 
         if advisory.root_name().is_none()
-            && !advisory.id().contains(" (deprecation)")
+            && !advisory.is_deprecation()
             && !has_fix(
                 &packument,
                 advisory.vulnerable_versions(),

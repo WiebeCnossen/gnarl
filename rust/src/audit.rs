@@ -55,6 +55,18 @@ impl std::fmt::Display for Severity {
     }
 }
 
+impl Severity {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Low => "low",
+            Severity::Moderate => "moderate",
+            Severity::High => "high",
+            Severity::Critical => "critical",
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 struct AuditDtoChildren {
     #[serde(rename = "ID")]
@@ -158,5 +170,17 @@ impl Advisory {
 
     pub fn root_name(&self) -> Option<&str> {
         self.root_name.as_deref()
+    }
+
+    pub fn is_deprecation(&self) -> bool {
+        self.id().contains(" (deprecation)")
+    }
+
+    pub fn label(&self) -> &'static str {
+        if self.is_deprecation() {
+            "deprecation"
+        } else {
+            self.severity.label()
+        }
     }
 }
