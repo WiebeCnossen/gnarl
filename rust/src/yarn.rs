@@ -1,11 +1,14 @@
+use nodejs_semver::{OutsideDirection, Range};
+
 use crate::{
     Error,
     audit::{Advisory, Severity},
     locks::Locks,
-    out_fix, out_yarn, parse,
+    out_fix, out_hit, out_info, out_yarn, parse,
     project::Project,
 };
 use std::{
+    cmp::Ordering,
     path::PathBuf,
     process::{Command, Output},
 };
@@ -126,13 +129,77 @@ impl Yarn {
             let (name, tail) = parse::split_name(&package).unwrap_or((&package, "*"));
             let range = parse::parse_range(tail)?;
             let requested_range = parse::parse_range(&requested)?;
-            if range.intersect(&requested_range).is_some()
-                || !resolutions.iter().any(|resolution| {
-                    resolution.dependencies().iter().any(|dependency| {
-                        dependency.name() == name && range.eq(dependency.request())
-                    })
-                })
-            {
+            let mut needed = false;
+
+            // warn if any resolution has a dependency with a higher minimum version than range
+            if let Some(range_min_version) = requested_range.min_version() {
+                for resolution in &resolutions {
+                    for dependency in resolution
+                        .dependencies()
+                        .iter()
+                        .filter(|d| d.name() == name && (d.request().eq(&range) || tail == "*"))
+                    {
+                        if matches!(
+                            dependency.request().outside(
+                                &range_min_version,
+                                OutsideDirection::Lower,
+                                false,
+                            ),
+                            Ok(true)
+                        ) {
+                            out_hit!(
+                                "{} resolved to {} but request is {}",
+                                name,
+                                range_min_version,
+                                dependency.request()
+                            );
+                            continue;
+                        }
+
+                        if matches!(
+                            dependency.request().outside(
+                                &range_min_version,
+                                OutsideDirection::Higher,
+                                false,
+                            ),
+                            Ok(true)
+                        ) {
+                            out_info!(
+                                "{}@{} forced to {}",
+                                name,
+                                dependency.request(),
+                                requested_range
+                            );
+                            needed = true;
+                            continue;
+                        }
+
+                        // Check if the upper bound of requested range is less than the lower bound of dependency.request()
+                        match is_capped(dependency.request(), &requested_range) {
+                            Ordering::Less => {
+                                out_info!(
+                                    "{}@{} capped to {}",
+                                    name,
+                                    dependency.request(),
+                                    requested_range
+                                );
+                                needed = true;
+                            }
+                            Ordering::Greater => {
+                                out_info!(
+                                    "{}@{} expanded to {}",
+                                    name,
+                                    dependency.request(),
+                                    requested_range
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            if !needed {
                 out_fix!("drop resolution for {}", package);
                 self.project.reset_resolution(&package);
                 dirty = true;
@@ -146,4 +213,30 @@ impl Yarn {
         self.project.save()?;
         Ok(true)
     }
+}
+
+fn is_capped(range: &Range, cap: &Range) -> Ordering {
+    let min_versions = range
+        .min_version()
+        .iter()
+        .chain(cap.min_version().iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(min_version) = cap.min_satisfying(&min_versions)
+        && let Ok(cut) = Range::parse(format!("< {}", min_version))
+    {
+        if let Some(r) = range.difference(&cut)
+            && r.difference(cap).is_some()
+        {
+            return Ordering::Less;
+        }
+
+        if let Some(r) = cap.difference(&cut)
+            && r.difference(range).is_some()
+        {
+            return Ordering::Greater;
+        }
+    }
+
+    Ordering::Equal
 }
