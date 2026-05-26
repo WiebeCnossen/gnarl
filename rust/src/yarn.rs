@@ -14,10 +14,12 @@ use std::{
 };
 
 const AIKIDO_YARN_NAME: &str = "aikido-yarn";
+const SAFE_CHAIN_NAME: &str = "safe-chain";
 const YARN_NAME: &str = "yarn";
 
 pub struct Yarn {
     aikido_path: Option<PathBuf>,
+    safe_path: Option<PathBuf>,
     yarn_path: PathBuf,
     lock_path: PathBuf,
     project: Project,
@@ -30,6 +32,7 @@ const LOCK_NOT_FOUND: &str = "yarn.lock not found in current directory";
 impl Yarn {
     pub fn new(severity: Severity) -> Result<Self, Error> {
         let aikido_path = which::which(AIKIDO_YARN_NAME).ok();
+        let safe_path = which::which(SAFE_CHAIN_NAME).ok();
         let yarn_path = which::which(YARN_NAME)?;
 
         let package_path = PathBuf::from("package.json");
@@ -46,6 +49,7 @@ impl Yarn {
 
         Ok(Self {
             aikido_path,
+            safe_path,
             yarn_path,
             lock_path,
             project,
@@ -66,17 +70,15 @@ impl Yarn {
     }
 
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
-        let executable = if prefer_aikido {
-            self.aikido_path.as_ref().unwrap_or(&self.yarn_path)
-        } else {
-            &self.yarn_path
-        };
-        let name = if prefer_aikido && self.aikido_path.is_some() {
-            "aikido install"
-        } else if args.len() > 1 {
-            "audit"
-        } else {
-            args[0]
+        let mut args = args.to_vec();
+        let (executable, name) = match prefer_aikido {
+            true if let Some(ref path) = self.safe_path => {
+                args.insert(0, "yarn");
+                (path, "safe-chain install")
+            }
+            true if let Some(ref path) = self.aikido_path => (path, "aikido-yarn install"),
+            _ if args.len() > 1 => (&self.yarn_path, "audit"),
+            _ => (&self.yarn_path, args[0]),
         };
         out_yarn!("{}", name);
         let output = Command::new(executable).args(args).output()?;

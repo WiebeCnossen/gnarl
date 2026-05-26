@@ -4,7 +4,7 @@ use nodejs_semver::{Range, Version};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
-use crate::{out_npm, parse};
+use crate::{Error, out_npm, parse};
 
 #[derive(Deserialize)]
 pub struct PackumentVersionDto {
@@ -15,6 +15,7 @@ pub struct PackumentVersionDto {
 struct PackumentDto {
     name: String,
     versions: HashMap<String, PackumentVersionDto>,
+    time: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -61,11 +62,37 @@ impl Packument {
 impl TryFrom<PackumentDto> for Packument {
     type Error = crate::Error;
     fn try_from(dto: PackumentDto) -> Result<Self, Self::Error> {
+        let time = dto
+            .time
+            .into_iter()
+            .map(|(key, value)| {
+                let date = chrono::DateTime::parse_from_rfc3339(&value).map_err(
+                    |e: chrono::ParseError| Error::String(format!("Invalid time {}: {}", key, e)),
+                )?;
+                Ok((key, date.into()))
+            })
+            .collect::<Result<HashMap<String, chrono::DateTime<chrono::Utc>>, crate::Error>>()?;
+        let now_minus_1_day = chrono::Utc::now() - chrono::Duration::days(1);
         let mut versions: Vec<_> = dto
             .versions
             .into_iter()
-            .map(|(version, ver_dto)| {
-                let ver = parse::parse_version(&version)?;
+            .flat_map(|(version, ver_dto)| {
+                if let Some(&time) = time.get(&version) {
+                    if time >= now_minus_1_day {
+                        out_npm!(
+                            "{}@{} disregarded until {}",
+                            dto.name,
+                            version,
+                            time + chrono::Duration::days(1)
+                        );
+                        return None;
+                    }
+                } else {
+                    out_npm!("{}@{} has no release date", dto.name, version);
+                    return None;
+                }
+
+                let ver = parse::parse_version(&version).ok()?;
                 let dependencies = match ver_dto.dependencies {
                     Some(deps) => {
                         let mut result = HashMap::new();
@@ -78,12 +105,12 @@ impl TryFrom<PackumentDto> for Packument {
                     }
                     None => HashMap::new(),
                 };
-                Ok(PackumentVersion {
+                Some(PackumentVersion {
                     version: ver,
                     dependencies,
                 })
             })
-            .collect::<Result<Vec<_>, crate::Error>>()?;
+            .collect::<Vec<_>>();
         versions.sort_unstable_by(|a: &PackumentVersion, b: &PackumentVersion| {
             a.version.cmp(&b.version)
         });
