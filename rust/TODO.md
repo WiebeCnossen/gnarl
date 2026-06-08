@@ -8,3 +8,4 @@
 * [ ] show a resolution suggestion for unresolved issues (fix outside range)
 * [x] drop resolution if it overlaps with an advisory
 * [ ] read yarnrc.yml for minimal age gate value
+* [ ] show resolution as update if package is direct (dev)dependency

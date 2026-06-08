@@ -2,52 +2,36 @@
 
 **gnarl** - the yarn v2/v3/v4 companion tool (Rust implementation).
 
-This is a complete translation of the Go version in functionality and usage.
+This is a complete and incompatible rewrite of the Go version.
+
+*Note*: it is highly recommended to use `yarn` version `4.15` or later with `npmMinimalAgeGate: 1d` in the `.yarnrc.yml` file in combination with Aikido safe-chain.
 
 # Usage
 
 ```
-gnarl [<auto | audit | fix | help | reset | shrink> <args>]
+gnarl [check | reset <packages>] [-s <severity>]
 ```
 
 ## Auto
 
 This is the default operation. It will do
 
-1. `yarn install`
-2. `yarn dedupe`
-3. `gnarl audit`
-4. restart from 1 if `yarn.lock` was modified in this iteration
+1. `install`
+2. `dedupe`
+3. `audit`
+4. `reset` packages that can be fixed within the specified range
+5. restart from 1 if `yarn.lock` was modified in this iteration
 
 ```
-gnarl [auto]
+gnarl [-s <severity>]
 ```
 
-## Audit
+## Check
 
-Runs an npm audit,
-does `gnarl reset` for issues with a safe fix,
-reports remaining issues with suggested resolutions and
-checks whether all current resolution are still in use.
+Only runs an audit and checks what issues and fixes are available
 
 ```
-gnarl audit
-```
-
-## Fix
-
-Fixes the resolutions for a package according to the given safe versions.
-
-```
-gnarl fix package-name safe-version-request
-```
-
-## Help
-
-Prints version and help.
-
-```
-gnarl help
+gnarl check [-s severity]
 ```
 
 ## Reset
@@ -58,15 +42,12 @@ Removes the resolutions for a package, so that a subsequent `yarn install` will 
 gnarl reset package-names...
 ```
 
-## Shrink
+## Help
 
-**DEPRECATED**
-
-Joins package version resolutions, removing old versions where possible.
-More aggressive and less reliable than `yarn dedupe`.
+Prints version and help.
 
 ```
-gnarl shrink
+gnarl help
 ```
 
 # Compilation

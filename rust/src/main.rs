@@ -19,11 +19,12 @@ use crate::gnarl::Gnarl;
 pub use error::Error;
 pub use package::Package;
 
-const VERSION: &str = "2.0.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> Result<(), Error> {
     let command = Command::try_from(env::args())?;
 
+    out_info!("gnarl {VERSION}");
     match command.verb() {
         Auto => {
             let mut gnarl = Gnarl::new(command.options())?;
@@ -41,7 +42,7 @@ fn main() -> Result<(), Error> {
         }
 
         Help => {
-            out_info!("gnarl {} - the yarn v4 companion tool", VERSION);
+            out_info!("the yarn v4 companion tool");
             out_indent!("usage: gnarl [<auto | reset | check | info | help> <args>]");
             out_indent!("> gnarl [auto] [-n]");
             out_indent!("> gnarl reset [-n] package-names...");
