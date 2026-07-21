@@ -58,6 +58,7 @@ pub fn parse_qualified_range(qualified_range: &str) -> Result<(&str, Range), cra
 
 pub fn parse_range(range: &str) -> Result<Range, Error> {
     (match range {
+        "canary" => Range::parse("* || *-*"),
         "latest" => Range::parse("*"),
         _ => Range::parse(range),
     })
