@@ -1,2 +1,2 @@
 *.exe
-/rust/target
+/target
