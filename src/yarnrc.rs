@@ -104,7 +104,7 @@ fn write_text(path: &PathBuf, text: &str) -> Result<(), Error> {
 /// npmAuditIgnoreAdvisories:
 ///   - "123"
 /// ```
-fn pretty_ignore_block(ids: &[String]) -> String {
+pub(crate) fn pretty_ignore_block(ids: &[String]) -> String {
     let mut block = String::from("npmAuditIgnoreAdvisories:\n");
     for id in ids {
         block.push_str("  - ");

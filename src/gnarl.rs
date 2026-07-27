@@ -12,6 +12,7 @@ use crate::{
     package::Dependency,
     parse,
     yarn::Yarn,
+    yarnrc::pretty_ignore_block,
 };
 
 pub struct Gnarl {
@@ -22,7 +23,6 @@ pub struct Gnarl {
 
 struct SuggestedFix {
     version: Version,
-    id: String,
 }
 
 impl Gnarl {
@@ -42,6 +42,7 @@ impl Gnarl {
         let mut fixes = BTreeMap::new();
         let mut resolutions = BTreeMap::new();
         let mut errors = vec![];
+        let mut ignore_suggestions = BTreeMap::new();
         for advisory in &advisories {
             out_hit!(
                 "{}: {}@{}",
@@ -93,7 +94,6 @@ impl Gnarl {
                             advisory.module_name(),
                             original_request,
                             fix,
-                            advisory.id(),
                         );
                     } else if let Some(fix) =
                         get_resolution(packument, advisory.vulnerable_versions(), request)
@@ -103,15 +103,15 @@ impl Gnarl {
                             advisory.module_name(),
                             original_request,
                             fix,
-                            advisory.id(),
                         );
+                        record_ignore_suggestion(&mut ignore_suggestions, &advisory);
                     } else {
                         errors.push(format!(
-                            "\"{}@{}\"  # ignore: {}",
+                            "\"{}@{}\"",
                             advisory.module_name(),
-                            original_request,
-                            advisory.id()
+                            original_request
                         ));
+                        record_ignore_suggestion(&mut ignore_suggestions, &advisory);
                     }
                 }
             }
@@ -140,13 +140,14 @@ impl Gnarl {
                 .collect(),
         );
         print_section(
-            "resolutions",
+            "suggested resolutions",
             resolutions
                 .iter()
-                .map(|(k, v)| format!("\"{}\": \"^{}\",  # ignore: {}", k, v.version, v.id))
+                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v.version))
                 .collect(),
         );
         print_section("unresolved issues", errors);
+        self.print_suggested_ignores(&yarn, ignore_suggestions)?;
 
         Ok(())
     }
@@ -236,6 +237,42 @@ impl Gnarl {
         }
 
         print_section("npmAuditIgnoreAdvisories", lines);
+        Ok(())
+    }
+
+    fn print_suggested_ignores(
+        &self,
+        yarn: &Yarn,
+        suggestions: BTreeMap<String, IgnoreSuggestion>,
+    ) -> Result<(), Error> {
+        let existing: HashSet<String> = yarn
+            .yarnrc()?
+            .npm_audit_ignore_advisories()
+            .into_iter()
+            .collect();
+
+        let ids: Vec<String> = suggestions
+            .keys()
+            .filter(|id| !existing.contains(id.as_str()))
+            .cloned()
+            .collect();
+        if ids.is_empty() {
+            return Ok(());
+        }
+
+        let lines: Vec<String> = ids
+            .iter()
+            .filter_map(|id| suggestions.get(id))
+            .map(|s| {
+                format!(
+                    "{}  {}  {}@{}",
+                    s.id, s.severity, s.module_name, s.vulnerable_versions
+                )
+            })
+            .collect();
+
+        print_section("suggested ignores", lines);
+        print!("{}", pretty_ignore_block(&ids));
         Ok(())
     }
 
@@ -389,10 +426,9 @@ impl Gnarl {
             )
         {
             out_info!(
-                "{}@{} has no fix  # ignore: {}",
+                "{}@{} has no fix",
                 advisory.module_name(),
-                advisory.vulnerable_versions(),
-                advisory.id()
+                advisory.vulnerable_versions()
             );
         }
 
@@ -489,22 +525,38 @@ fn print_section(title: &str, mut lines: Vec<String>) {
     }
 }
 
+struct IgnoreSuggestion {
+    id: String,
+    severity: String,
+    module_name: String,
+    vulnerable_versions: String,
+}
+
+fn record_ignore_suggestion(
+    map: &mut BTreeMap<String, IgnoreSuggestion>,
+    advisory: &Advisory,
+) {
+    map.entry(advisory.id().to_owned()).or_insert_with(|| IgnoreSuggestion {
+        id: advisory.id().to_owned(),
+        severity: advisory.severity().to_string(),
+        module_name: advisory.module_name().to_owned(),
+        vulnerable_versions: advisory.vulnerable_versions().to_string(),
+    });
+}
+
 fn add_fix(
     map: &mut BTreeMap<String, SuggestedFix>,
     package: &str,
     request: &str,
     resolution: &Version,
-    id: &str,
 ) {
     map.entry(format!("{}@{}", package, request))
         .and_modify(|v| {
             if v.version.lt(resolution) {
                 v.version = resolution.to_owned();
-                v.id = id.to_owned();
             }
         })
         .or_insert(SuggestedFix {
             version: resolution.to_owned(),
-            id: id.to_owned(),
         });
 }

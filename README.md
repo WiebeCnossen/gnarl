@@ -24,7 +24,7 @@ This is the default operation. It will do
 6. drop unused resolutions from `package.json`
 7. drop orphan `npmAuditIgnoreAdvisories` entries and entries superseded by a within-range fix (resetting those packages)
 8. if resolutions were removed or ignore hygiene reset packages, run `install` + `dedupe` once more
-9. run `check` (including ignore overview and ID hints)
+9. run `check` (including ignore overview and suggested ignores)
 
 ```
 gnarl [-s <severity>]
@@ -35,7 +35,8 @@ gnarl [-s <severity>]
 Only runs an audit and checks what issues and fixes are available. It also:
 
 - prints an overview of current `.yarnrc.yml` `npmAuditIgnoreAdvisories` (ID, severity, package when known)
-- mentions the Yarn audit ID next to resolution suggestions and unresolved / no-fix issues (candidate for `npmAuditIgnoreAdvisories`)
+- prints `suggested resolutions` (outside-range) and unresolved issues without inline ignore annotations
+- when there are new ignore candidates (from suggested resolutions and unresolved issues, excluding IDs already in yarnrc), prints a `suggested ignores` section with the same enrichment form as the overview, followed by a paste-ready `npmAuditIgnoreAdvisories` YAML block of **new IDs only** (merge into `.yarnrc.yml` yourself)
 
 `check` does not modify `.yarnrc.yml`.
 

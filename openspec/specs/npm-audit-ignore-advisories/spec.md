@@ -1,36 +1,60 @@
 ## Purpose
 
-Suggest Yarn audit IDs for `npmAuditIgnoreAdvisories`, overview current ignores with package and severity, and auto-drop orphan or within-range-fixable ignore entries.
+Suggest Yarn audit IDs for `npmAuditIgnoreAdvisories` via a dedicated `suggested ignores` section (enriched overview plus paste-ready YAML), overview current ignores with package and severity, and auto-drop orphan or within-range-fixable ignore entries.
 
 ## Requirements
 
-### Requirement: Mention audit ID for resolution suggestions
+### Requirement: Suggested ignores section
 
-When `check` reports a resolution suggestion for an advisory (fix exists only outside the requested range), gnarl MUST also print the advisory ID as reported by `yarn npm audit`, as a candidate for `npmAuditIgnoreAdvisories`.
+When `check` (including the final `check` after `auto`) has at least one ignore candidate, gnarl MUST print a section titled `suggested ignores`. Candidates MUST be advisory IDs from outside-range resolution suggestions and from unresolved / no-fix issues. Candidates MUST NOT include deprecations, within-range fix suggestions, or IDs already listed in `.yarnrc.yml` `npmAuditIgnoreAdvisories`. Each candidate MUST appear once. Enrichment lines MUST use the same form as the current `npmAuditIgnoreAdvisories` overview (advisory ID, severity, and package with vulnerable range when known). Immediately after those lines, gnarl MUST print a YAML block that begins with the `npmAuditIgnoreAdvisories` key and lists only the new suggested IDs (not a merge with existing yarnrc entries), in a form suitable for pasting into `.yarnrc.yml`.
 
-#### Scenario: Resolution suggestion includes ID
+#### Scenario: Suggestions include resolutions and unresolved
 
-- **WHEN** `check` classifies an advisory as needing a `package.json` resolution
-- **THEN** the output for that suggestion MUST include the advisory's audit ID
+- **WHEN** `check` has outside-range resolution candidates and unresolved issues with audit IDs not already ignored
+- **THEN** stdout MUST include a `suggested ignores` section with enriched lines for those IDs followed by a `npmAuditIgnoreAdvisories:` YAML list of those IDs only
 
-#### Scenario: Deprecations excluded
+#### Scenario: Already-ignored IDs omitted
 
-- **WHEN** the advisory is a deprecation
-- **THEN** gnarl MUST NOT suggest an `npmAuditIgnoreAdvisories` ID for it
+- **WHEN** an advisory would otherwise be a candidate but its ID is already in `npmAuditIgnoreAdvisories`
+- **THEN** that ID MUST NOT appear in the enriched lines or the YAML block
 
-### Requirement: Mention audit ID when no fix is available
+#### Scenario: Empty suggestions omitted
 
-When `check` reports an unresolved issue (no fix in the packument for the vulnerable range) or `auto` reports that a package has no fix, gnarl MUST also print the advisory ID as reported by `yarn npm audit`, as a candidate for `npmAuditIgnoreAdvisories`.
+- **WHEN** there are no resolution or unresolved candidates, or every such ID is already ignored
+- **THEN** gnarl MUST omit the `suggested ignores` section and its YAML block entirely
 
-#### Scenario: Unresolved issue includes ID
+#### Scenario: Deprecations and within-range fixes excluded
 
-- **WHEN** `check` classifies an advisory as an unresolved issue
-- **THEN** the output for that issue MUST include the advisory's audit ID
+- **WHEN** the only advisories are deprecations and/or within-range fix suggestions
+- **THEN** gnarl MUST NOT emit `suggested ignores`
 
-#### Scenario: Auto no-fix message includes ID
+### Requirement: No inline ignore annotations
+
+gnarl MUST NOT append `# ignore:` (or equivalent inline audit-ID hints) to resolution suggestion lines, unresolved-issue lines, or `auto` no-fix messages. Audit IDs for those cases MUST appear only via the `suggested ignores` section when applicable.
+
+#### Scenario: Resolution lines are clean
+
+- **WHEN** `check` prints a suggested resolution
+- **THEN** the line MUST NOT contain an inline ignore ID annotation
+
+#### Scenario: Unresolved lines are clean
+
+- **WHEN** `check` prints an unresolved issue
+- **THEN** the line MUST NOT contain an inline ignore ID annotation
+
+#### Scenario: Auto no-fix message is clean
 
 - **WHEN** `auto` reports that a package has no fix
-- **THEN** that message MUST include the advisory's audit ID
+- **THEN** that message MUST NOT contain an inline ignore ID annotation
+
+### Requirement: Suggested resolutions section title
+
+When `check` prints outside-range resolution suggestions, the section title MUST be `suggested resolutions` (not `resolutions`).
+
+#### Scenario: Section renamed
+
+- **WHEN** `check` has at least one outside-range resolution suggestion
+- **THEN** stdout MUST label that section `suggested resolutions`
 
 ### Requirement: Overview of current npmAuditIgnoreAdvisories
 
