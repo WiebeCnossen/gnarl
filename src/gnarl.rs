@@ -38,7 +38,7 @@ impl Gnarl {
     }
 
     pub fn check(&mut self) -> Result<(), Error> {
-        let yarn = Yarn::new(self.options.severity())?;
+        let mut yarn = Yarn::new(self.options.severity())?;
 
         let advisories = yarn.audit()?;
         let mut deprecations = vec![];
@@ -55,77 +55,81 @@ impl Gnarl {
             );
         }
 
-        for advisory in advisories {
-            if advisory.is_deprecation() {
-                deprecations.push(format!(
-                    "\"{}@{}\"",
-                    advisory.module_name(),
-                    advisory
-                        .tree_versions()
-                        .iter()
-                        .map(|v| v.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-                continue;
-            }
+        let lock_len = {
+            let locks = yarn.locks()?;
+            for advisory in advisories {
+                if advisory.is_deprecation() {
+                    deprecations.push(format!(
+                        "\"{}@{}\"",
+                        advisory.module_name(),
+                        advisory
+                            .tree_versions()
+                            .iter()
+                            .map(|v| v.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                    continue;
+                }
 
-            self.npm.retrieve_packument(advisory.module_name())?;
-            let packument = self.npm.packument(advisory.module_name())?;
-            let yarn_resolutions = yarn.locks()?.for_package(advisory.module_name())?;
-            for tree_version in advisory.tree_versions() {
-                let resolution = yarn_resolutions
-                    .iter()
-                    .find(|resolution| {
-                        resolution
-                            .package()
-                            .version()
-                            .map(|v| v.to_string() == tree_version.to_string())
-                            .unwrap_or(false)
-                    })
-                    .ok_or_else(|| format!("Resolution for {} not found", tree_version))?;
-                for request in resolution.requests() {
-                    let original_request = resolution.original(request)?;
-                    if let Some(fix) = get_fix(
-                        packument,
-                        advisory.vulnerable_versions(),
-                        advisory.tree_versions().last().unwrap(),
-                        request,
-                    ) {
-                        add_fix(
-                            &mut fixes,
-                            advisory.module_name(),
-                            original_request,
-                            fix,
-                        );
-                    } else if let Some(fix) =
-                        get_resolution(packument, advisory.vulnerable_versions(), request)
-                    {
-                        add_fix(
-                            &mut resolutions,
-                            advisory.module_name(),
-                            original_request,
-                            fix,
-                        );
-                        record_ignore_suggestion(&mut ignore_suggestions, &advisory);
-                    } else {
-                        errors.push(format!(
-                            "\"{}@{}\"",
-                            advisory.module_name(),
-                            original_request
-                        ));
-                        record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                self.npm.retrieve_packument(advisory.module_name())?;
+                let packument = self.npm.packument(advisory.module_name())?;
+                let yarn_resolutions = locks.for_package(advisory.module_name());
+                for tree_version in advisory.tree_versions() {
+                    let resolution = yarn_resolutions
+                        .iter()
+                        .find(|resolution| {
+                            resolution
+                                .package()
+                                .version()
+                                .map(|v| v.to_string() == tree_version.to_string())
+                                .unwrap_or(false)
+                        })
+                        .ok_or_else(|| format!("Resolution for {} not found", tree_version))?;
+                    for request in resolution.requests() {
+                        let original_request = resolution.original(request)?;
+                        if let Some(fix) = get_fix(
+                            packument,
+                            advisory.vulnerable_versions(),
+                            advisory.tree_versions().last().unwrap(),
+                            request,
+                        ) {
+                            add_fix(
+                                &mut fixes,
+                                advisory.module_name(),
+                                original_request,
+                                fix,
+                            );
+                        } else if let Some(fix) =
+                            get_resolution(packument, advisory.vulnerable_versions(), request)
+                        {
+                            add_fix(
+                                &mut resolutions,
+                                advisory.module_name(),
+                                original_request,
+                                fix,
+                            );
+                            record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                        } else {
+                            errors.push(format!(
+                                "\"{}@{}\"",
+                                advisory.module_name(),
+                                original_request
+                            ));
+                            record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                        }
                     }
                 }
             }
-        }
+            locks.len()
+        };
 
         fixes.retain(|key, _| !resolutions.contains_key(key));
 
         Kpis::new(
             yarn.len_dependencies(),
             yarn.len_dev_dependencies(),
-            yarn.locks()?.len(),
+            lock_len,
             yarn.len_resolutions(),
             deprecations.len(),
             fixes.len() + resolutions.len() + errors.len(),
@@ -330,15 +334,15 @@ impl Gnarl {
 
     fn within_range_resettable(
         &mut self,
-        yarn: &Yarn,
+        yarn: &mut Yarn,
         advisory: &Advisory,
     ) -> Result<bool, Error> {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
         let mut fixable = false;
         let mut blocked = false;
-        let locks = yarn.locks()?;
-        for dependent in locks.dependents(advisory.module_name())?.iter() {
+        let dependents = yarn.locks()?.dependents(advisory.module_name()).to_vec();
+        for dependent in &dependents {
             let tree_version = match advisory
                 .tree_versions()
                 .iter()
@@ -371,8 +375,8 @@ impl Gnarl {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
         let mut fixable = false;
-        let locks = yarn.locks()?;
-        for dependent in locks.dependents(advisory.module_name())?.iter() {
+        let dependents = yarn.locks()?.dependents(advisory.module_name()).to_vec();
+        for dependent in &dependents {
             let tree_version = match advisory
                 .tree_versions()
                 .iter()
@@ -443,7 +447,7 @@ impl Gnarl {
 
     fn create_advisory(
         &mut self,
-        yarn: &Yarn,
+        yarn: &mut Yarn,
         advisory: &Advisory,
         dependent: &Dependency,
         root_name: String,
@@ -452,7 +456,7 @@ impl Gnarl {
         let packument = self.npm.packument(dependent.name())?;
         let tree_versions = yarn
             .locks()?
-            .for_package(dependent.name())?
+            .for_package(dependent.name())
             .iter()
             .flat_map(|resolution| resolution.package().version())
             .cloned()

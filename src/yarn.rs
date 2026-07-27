@@ -5,6 +5,7 @@ use crate::{
     audit::{Advisory, Severity},
     locks::Locks,
     out_fix, out_hit, out_info, out_yarn, parse,
+    package::Dependency,
     project::Project,
     yarnrc::YarnRc,
 };
@@ -25,6 +26,7 @@ pub struct Yarn {
     lock_path: PathBuf,
     project: Project,
     severity: Severity,
+    locks: Option<Locks>,
 }
 
 const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
@@ -55,6 +57,7 @@ impl Yarn {
             lock_path,
             project,
             severity,
+            locks: None,
         })
     }
 
@@ -152,13 +155,21 @@ impl Yarn {
             .collect()
     }
 
-    pub fn locks(&self) -> Result<Locks, Error> {
-        Locks::read(self.lock_path.clone())
+    pub fn locks(&mut self) -> Result<&mut Locks, Error> {
+        if self.locks.is_none() {
+            self.locks = Some(Locks::read(self.lock_path.clone())?);
+        }
+        Ok(self.locks.as_mut().unwrap())
     }
 
     pub fn reset_resolutions(&mut self) -> Result<bool, Error> {
         let mut dirty = false;
-        let resolutions = self.locks()?.all()?;
+        let lock_dependencies: Vec<Dependency> = self
+            .locks()?
+            .all()
+            .iter()
+            .flat_map(|resolution| resolution.dependencies().iter().cloned())
+            .collect();
         for (package, requested) in self.project.resolutions() {
             if parse::parse_range(&requested).is_err() {
                 continue;
@@ -171,68 +182,64 @@ impl Yarn {
 
             // warn if any resolution has a dependency with a higher minimum version than range
             if let Some(range_min_version) = requested_range.min_version() {
-                for resolution in &resolutions {
-                    for dependency in resolution
-                        .dependencies()
-                        .iter()
-                        .filter(|d| d.name() == name && (d.request().eq(&range) || tail == "*"))
-                    {
-                        if matches!(
-                            dependency.request().outside(
-                                &range_min_version,
-                                OutsideDirection::Lower,
-                                false,
-                            ),
-                            Ok(true)
-                        ) {
-                            out_hit!(
-                                "{} resolved to {} but request is {}",
-                                name,
-                                range_min_version,
-                                dependency.request()
-                            );
-                            continue;
-                        }
+                for dependency in lock_dependencies.iter().filter(|d| {
+                    d.name() == name && (d.request().eq(&range) || tail == "*")
+                }) {
+                    if matches!(
+                        dependency.request().outside(
+                            &range_min_version,
+                            OutsideDirection::Lower,
+                            false,
+                        ),
+                        Ok(true)
+                    ) {
+                        out_hit!(
+                            "{} resolved to {} but request is {}",
+                            name,
+                            range_min_version,
+                            dependency.request()
+                        );
+                        continue;
+                    }
 
-                        if matches!(
-                            dependency.request().outside(
-                                &range_min_version,
-                                OutsideDirection::Higher,
-                                false,
-                            ),
-                            Ok(true)
-                        ) {
+                    if matches!(
+                        dependency.request().outside(
+                            &range_min_version,
+                            OutsideDirection::Higher,
+                            false,
+                        ),
+                        Ok(true)
+                    ) {
+                        out_info!(
+                            "{}@{} forced to {}",
+                            name,
+                            dependency.request(),
+                            requested_range
+                        );
+                        needed = true;
+                        continue;
+                    }
+
+                    // Check if the upper bound of requested range is less than the lower bound of dependency.request()
+                    match is_capped(dependency.request(), &requested_range) {
+                        Ordering::Less => {
                             out_info!(
-                                "{}@{} forced to {}",
+                                "{}@{} capped to {}",
                                 name,
                                 dependency.request(),
                                 requested_range
                             );
                             needed = true;
-                            continue;
                         }
-
-                        // Check if the upper bound of requested range is less than the lower bound of dependency.request()
-                        match is_capped(dependency.request(), &requested_range) {
-                            Ordering::Less => {
-                                out_info!(
-                                    "{}@{} capped to {}",
-                                    name,
-                                    dependency.request(),
-                                    requested_range
-                                );
-                                needed = true;
-                            }
-                            Ordering::Greater => {
-                                out_info!(
-                                    "{}@{} expanded to {}",
-                                    name,
-                                    dependency.request(),
-                                    requested_range
-                                );
-                            }
-                            _ => {}
+                        Ordering::Greater => {
+                            out_info!(
+                                "{}@{} expanded to {}",
+                                name,
+                                dependency.request(),
+                                requested_range
+                            );
                         }
+                        _ => {}
                     }
                 }
             }

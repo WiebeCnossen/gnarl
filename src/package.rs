@@ -40,6 +40,7 @@ impl TryFrom<String> for Package {
     }
 }
 
+#[derive(Clone)]
 pub struct Dependency {
     name: String,
     source: String,
