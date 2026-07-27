@@ -19,6 +19,8 @@ pub struct Gnarl {
     options: Options,
     npm: Npm,
     reset: HashSet<String>,
+    /// Printed `{package} blocked by {other}@{version}` keys for this process run.
+    blocked_by: HashSet<String>,
 }
 
 struct SuggestedFix {
@@ -31,6 +33,7 @@ impl Gnarl {
             options,
             npm: Npm::new()?,
             reset: HashSet::new(),
+            blocked_by: HashSet::new(),
         })
     }
 
@@ -403,12 +406,15 @@ impl Gnarl {
                     )?,
                 );
             } else {
-                out_info!(
+                let message = format!(
                     "{} blocked by {}@{}",
                     advisory.root_name().unwrap_or(advisory.module_name()),
                     advisory.module_name(),
                     tree_version
                 );
+                if self.blocked_by.insert(message.clone()) {
+                    out_info!("{}", message);
+                }
             }
         }
 
