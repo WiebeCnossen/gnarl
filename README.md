@@ -22,7 +22,9 @@ This is the default operation. It will do
 4. `reset` packages that can be fixed within the specified range
 5. restart from 1 if `yarn.lock` was modified in this iteration
 6. drop unused resolutions from `package.json`
-7. if resolutions were removed, run `install` + `dedupe` once more
+7. drop orphan `npmAuditIgnoreAdvisories` entries and entries superseded by a within-range fix (resetting those packages)
+8. if resolutions were removed or ignore hygiene reset packages, run `install` + `dedupe` once more
+9. run `check` (including ignore overview and ID hints)
 
 ```
 gnarl [-s <severity>]
@@ -30,7 +32,12 @@ gnarl [-s <severity>]
 
 ## Check
 
-Only runs an audit and checks what issues and fixes are available
+Only runs an audit and checks what issues and fixes are available. It also:
+
+- prints an overview of current `.yarnrc.yml` `npmAuditIgnoreAdvisories` (ID, severity, package when known)
+- mentions the Yarn audit ID next to resolution suggestions and unresolved / no-fix issues (candidate for `npmAuditIgnoreAdvisories`)
+
+`check` does not modify `.yarnrc.yml`.
 
 ```
 gnarl check [-s severity]

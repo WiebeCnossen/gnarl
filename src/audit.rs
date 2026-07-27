@@ -11,7 +11,7 @@ struct AuditDto {
     children: AuditDtoChildren,
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Deserialize, Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Severity {
     #[serde(rename = "info")]
     Info,
@@ -65,6 +65,11 @@ impl Severity {
             Severity::Critical => "critical",
         }
     }
+
+    /// Yarn `--severity` semantics: include this level and anything more severe.
+    pub fn meets_threshold(self, threshold: Severity) -> bool {
+        self >= threshold
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -92,11 +97,20 @@ pub struct Advisory {
     root_name: Option<String>,
 }
 
+fn normalize_advisory_id(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string().trim_matches('"').to_owned(),
+    }
+}
+
 impl TryFrom<AuditDto> for Advisory {
     type Error = crate::Error;
     fn try_from(dto: AuditDto) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: dto.children.id.to_string(),
+            id: normalize_advisory_id(&dto.children.id),
             module_name: dto.value,
             severity: dto.children.severity,
             vulnerable_versions: parse::parse_range(&dto.children.vulnerable_versions)?,
@@ -182,5 +196,26 @@ impl Advisory {
         } else {
             self.severity.label()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severity_ordering_matches_yarn_threshold() {
+        assert!(Severity::Info < Severity::Low);
+        assert!(Severity::Low < Severity::Moderate);
+        assert!(Severity::Moderate < Severity::High);
+        assert!(Severity::High < Severity::Critical);
+    }
+
+    #[test]
+    fn meets_threshold_includes_equal_and_higher() {
+        assert!(Severity::High.meets_threshold(Severity::High));
+        assert!(Severity::Critical.meets_threshold(Severity::High));
+        assert!(!Severity::Moderate.meets_threshold(Severity::High));
+        assert!(Severity::Info.meets_threshold(Severity::Info));
     }
 }

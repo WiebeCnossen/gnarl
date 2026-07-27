@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use nodejs_semver::{OutsideDirection, Range, Version};
 
@@ -8,7 +8,7 @@ use crate::{
     check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
-    out_hit, out_indent, out_info,
+    out_fix, out_hit, out_indent, out_info,
     package::Dependency,
     parse,
     yarn::Yarn,
@@ -18,6 +18,11 @@ pub struct Gnarl {
     options: Options,
     npm: Npm,
     reset: HashSet<String>,
+}
+
+struct SuggestedFix {
+    version: Version,
+    id: String,
 }
 
 impl Gnarl {
@@ -83,7 +88,13 @@ impl Gnarl {
                         advisory.tree_versions().last().unwrap(),
                         request,
                     ) {
-                        add_fix(&mut fixes, advisory.module_name(), original_request, fix);
+                        add_fix(
+                            &mut fixes,
+                            advisory.module_name(),
+                            original_request,
+                            fix,
+                            advisory.id(),
+                        );
                     } else if let Some(fix) =
                         get_resolution(packument, advisory.vulnerable_versions(), request)
                     {
@@ -92,12 +103,14 @@ impl Gnarl {
                             advisory.module_name(),
                             original_request,
                             fix,
+                            advisory.id(),
                         );
                     } else {
                         errors.push(format!(
-                            "\"{}@{}\"",
+                            "\"{}@{}\"  # ignore: {}",
                             advisory.module_name(),
-                            original_request
+                            original_request,
+                            advisory.id()
                         ));
                     }
                 }
@@ -116,19 +129,21 @@ impl Gnarl {
         )
         .print();
 
+        self.print_ignore_overview(&yarn)?;
+
         print_section("deprecations", deprecations);
         print_section(
             "fixes",
             fixes
                 .iter()
-                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
+                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v.version))
                 .collect(),
         );
         print_section(
             "resolutions",
             resolutions
                 .iter()
-                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v))
+                .map(|(k, v)| format!("\"{}\": \"^{}\",  # ignore: {}", k, v.version, v.id))
                 .collect(),
         );
         print_section("unresolved issues", errors);
@@ -181,14 +196,130 @@ impl Gnarl {
             }
         };
 
-        let resolutions_dirty = Yarn::new(self.options.severity())?.reset_resolutions()?;
-        if resolutions_dirty && !self.options.no_install() {
+        let mut yarn = Yarn::new(self.options.severity())?;
+        let resolutions_dirty = yarn.reset_resolutions()?;
+        let ignore_resets = self.reset_ignored_advisories(&mut yarn)?;
+        if (resolutions_dirty || !ignore_resets.is_empty()) && !self.options.no_install() {
             let yarn = Yarn::new(self.options.severity())?;
             yarn.install()?;
             yarn.dedupe()?;
         }
 
         self.check()
+    }
+
+    fn print_ignore_overview(&mut self, yarn: &Yarn) -> Result<(), Error> {
+        let yarnrc = yarn.yarnrc()?;
+        let ignores = yarnrc.npm_audit_ignore_advisories();
+        if ignores.is_empty() {
+            return Ok(());
+        }
+
+        let unfiltered = yarn.audit_unfiltered()?;
+        let by_id: HashMap<&str, &Advisory> = unfiltered
+            .iter()
+            .map(|advisory| (advisory.id(), advisory))
+            .collect();
+
+        let mut lines = Vec::new();
+        for id in &ignores {
+            match by_id.get(id.as_str()) {
+                Some(advisory) => lines.push(format!(
+                    "{}  {}  {}@{}",
+                    id,
+                    advisory.severity(),
+                    advisory.module_name(),
+                    advisory.vulnerable_versions()
+                )),
+                None => lines.push(format!("{}  unknown", id)),
+            }
+        }
+
+        print_section("npmAuditIgnoreAdvisories", lines);
+        Ok(())
+    }
+
+    fn reset_ignored_advisories(&mut self, yarn: &mut Yarn) -> Result<Vec<String>, Error> {
+        let mut yarnrc = yarn.yarnrc()?;
+        let ignores = yarnrc.npm_audit_ignore_advisories();
+        if ignores.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let unfiltered = yarn.audit_unfiltered()?;
+        let by_id: HashMap<String, Advisory> = unfiltered
+            .into_iter()
+            .map(|advisory| (advisory.id().to_owned(), advisory))
+            .collect();
+
+        let mut yarnrc_dirty = false;
+        let mut resets = Vec::new();
+
+        for id in &ignores {
+            match by_id.get(id) {
+                None => {
+                    out_fix!("drop orphan ignore {}", id);
+                    if yarnrc.remove_npm_audit_ignore_advisory(id) {
+                        yarnrc_dirty = true;
+                    }
+                }
+                Some(advisory) if advisory.is_deprecation() => {}
+                Some(advisory) => {
+                    if self.within_range_resettable(yarn, advisory)? {
+                        out_fix!("drop ignore {} (within-range fix)", id);
+                        if yarnrc.remove_npm_audit_ignore_advisory(id) {
+                            yarnrc_dirty = true;
+                        }
+                        resets.push(advisory.module_name().to_owned());
+                    }
+                }
+            }
+        }
+
+        if yarnrc_dirty {
+            yarnrc.save()?;
+        }
+
+        if !resets.is_empty() {
+            yarn.locks()?.reset(&resets)?;
+            self.reset.extend(resets.iter().cloned());
+        }
+
+        Ok(resets)
+    }
+
+    fn within_range_resettable(
+        &mut self,
+        yarn: &Yarn,
+        advisory: &Advisory,
+    ) -> Result<bool, Error> {
+        self.npm.retrieve_packument(advisory.module_name())?;
+        let packument = self.npm.packument(advisory.module_name()).cloned()?;
+        let mut fixable = false;
+        let mut blocked = false;
+        let locks = yarn.locks()?;
+        for dependent in locks.dependents(advisory.module_name())?.iter() {
+            let tree_version = match advisory
+                .tree_versions()
+                .iter()
+                .rfind(|v| v.satisfies(dependent.request()))
+            {
+                Some(v) => v,
+                None => continue,
+            };
+            if has_fix(
+                &packument,
+                advisory.vulnerable_versions(),
+                tree_version,
+                dependent.request(),
+            ) {
+                fixable = true;
+            } else {
+                blocked = true;
+            }
+        }
+
+        Ok(fixable && !blocked && !self.reset.contains(advisory.module_name()))
     }
 
     fn fix(
@@ -258,9 +389,10 @@ impl Gnarl {
             )
         {
             out_info!(
-                "{}@{} has no fix",
+                "{}@{} has no fix  # ignore: {}",
                 advisory.module_name(),
-                advisory.vulnerable_versions()
+                advisory.vulnerable_versions(),
+                advisory.id()
             );
         }
 
@@ -358,16 +490,21 @@ fn print_section(title: &str, mut lines: Vec<String>) {
 }
 
 fn add_fix(
-    map: &mut BTreeMap<String, Version>,
+    map: &mut BTreeMap<String, SuggestedFix>,
     package: &str,
     request: &str,
     resolution: &Version,
+    id: &str,
 ) {
     map.entry(format!("{}@{}", package, request))
         .and_modify(|v| {
-            if (*v).lt(resolution) {
-                *v = resolution.to_owned();
+            if v.version.lt(resolution) {
+                v.version = resolution.to_owned();
+                v.id = id.to_owned();
             }
         })
-        .or_insert(resolution.to_owned());
+        .or_insert(SuggestedFix {
+            version: resolution.to_owned(),
+            id: id.to_owned(),
+        });
 }

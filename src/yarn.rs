@@ -6,6 +6,7 @@ use crate::{
     locks::Locks,
     out_fix, out_hit, out_info, out_yarn, parse,
     project::Project,
+    yarnrc::YarnRc,
 };
 use std::{
     cmp::Ordering,
@@ -96,24 +97,59 @@ impl Yarn {
         self.run(false, &["dedupe"])
     }
 
+    pub fn yarnrc(&self) -> Result<YarnRc, Error> {
+        YarnRc::read(PathBuf::from(".yarnrc.yml"))
+    }
+
     pub fn audit(&self) -> Result<Vec<Advisory>, Error> {
-        let output = self.run(
-            false,
-            &[
-                "npm",
-                "audit",
-                "--json",
-                "--recursive",
-                "--severity",
-                self.severity.to_string().as_str(),
-            ],
-        )?;
+        Ok(self.filter_by_severity(self.parse_audit(self.run_audit()?)?))
+    }
+
+    /// Full audit with `npmAuditIgnoreAdvisories` temporarily cleared and no severity
+    /// threshold applied, so ignored IDs of any severity remain visible for hygiene.
+    /// Restores the previous ignore list even if the audit fails.
+    pub fn audit_unfiltered(&self) -> Result<Vec<Advisory>, Error> {
+        let mut yarnrc = self.yarnrc()?;
+        let saved = yarnrc.npm_audit_ignore_advisories();
+        if saved.is_empty() {
+            return self.parse_audit(self.run_audit()?);
+        }
+
+        yarnrc.set_npm_audit_ignore_advisories(&[]);
+        yarnrc.save()?;
+
+        let result = self.run_audit().and_then(|output| self.parse_audit(output));
+
+        yarnrc.set_npm_audit_ignore_advisories(&saved);
+        let restore = yarnrc.save();
+
+        match (result, restore) {
+            (Ok(advisories), Ok(())) => Ok(advisories),
+            (Err(err), _) => Err(err),
+            (Ok(_), Err(err)) => Err(err),
+        }
+    }
+
+    fn run_audit(&self) -> Result<Output, Error> {
+        // Fetch all severities; gnarl applies `-s` itself so ignore hygiene can see
+        // below-threshold advisories and not treat them as orphans.
+        self.run(false, &["npm", "audit", "--json", "--recursive"])
+    }
+
+    fn parse_audit(&self, output: Output) -> Result<Vec<Advisory>, Error> {
         let stdout_str = String::from_utf8(output.stdout)?;
-        let advisories: Vec<Advisory> = stdout_str
+        stdout_str
             .lines()
+            .filter(|line| !line.trim().is_empty())
             .map(Advisory::parse)
-            .collect::<Result<Vec<Advisory>, Error>>()?;
-        Ok(advisories)
+            .collect()
+    }
+
+    fn filter_by_severity(&self, advisories: Vec<Advisory>) -> Vec<Advisory> {
+        advisories
+            .into_iter()
+            .filter(|advisory| advisory.severity().meets_threshold(self.severity))
+            .collect()
     }
 
     pub fn locks(&self) -> Result<Locks, Error> {

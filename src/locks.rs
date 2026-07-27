@@ -154,6 +154,10 @@ impl Locks {
         self.root.packages.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.root.packages.is_empty()
+    }
+
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
         let mut dirty = false;
         for package in packages {

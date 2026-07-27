@@ -1,23 +1,8 @@
-mod audit;
-mod check;
-mod cmd;
-mod error;
-mod gnarl;
-mod locks;
-mod npm;
-mod package;
-mod parse;
-mod project;
-mod ux;
-mod yarn;
-
 use std::env;
 
-use crate::cmd::{Command, Verb::*};
-use crate::gnarl::Gnarl;
-
-pub use error::Error;
-pub use package::Package;
+use gnarl::cmd::{Command, Verb::*};
+use gnarl::gnarl::Gnarl;
+use gnarl::{Error, out_indent, out_info};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

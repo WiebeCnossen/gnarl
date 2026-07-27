@@ -1,0 +1,32 @@
+---
+description: Run cargo clippy after Rust changes and fix all warnings
+alwaysApply: true
+---
+
+# Cargo Clippy
+
+After changing Rust code (`*.rs`, `Cargo.toml`), run Clippy and clear every warning before considering the work done.
+
+```bash
+cargo clippy --all-targets
+```
+
+## Requirements
+
+- Treat Clippy warnings as must-fix (do not leave `warn` output unresolved)
+- Prefer fixing the code over `#[allow(...)]`; allow only when the warning is a false positive and note why
+- Re-run Clippy after fixes until it reports no warnings
+- Include lib/bin/tests: use `--all-targets` so test and example code is checked too
+
+## Example
+
+```text
+# ❌ BAD — ship with Clippy noise
+warning: struct `Locks` has a public `len` method, but no `is_empty` method
+
+# ✅ GOOD — address the lint
+impl Locks {
+    pub fn len(&self) -> usize { ... }
+    pub fn is_empty(&self) -> bool { self.root.packages.is_empty() }
+}
+```
