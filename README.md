@@ -21,6 +21,8 @@ This is the default operation. It will do
 3. `audit`
 4. `reset` packages that can be fixed within the specified range
 5. restart from 1 if `yarn.lock` was modified in this iteration
+6. drop unused resolutions from `package.json`
+7. if resolutions were removed, run `install` + `dedupe` once more
 
 ```
 gnarl [-s <severity>]

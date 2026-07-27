@@ -181,7 +181,13 @@ impl Gnarl {
             }
         };
 
-        Yarn::new(self.options.severity())?.reset_resolutions()?;
+        let resolutions_dirty = Yarn::new(self.options.severity())?.reset_resolutions()?;
+        if resolutions_dirty && !self.options.no_install() {
+            let yarn = Yarn::new(self.options.severity())?;
+            yarn.install()?;
+            yarn.dedupe()?;
+        }
+
         self.check()
     }
 
