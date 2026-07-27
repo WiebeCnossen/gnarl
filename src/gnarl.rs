@@ -368,7 +368,6 @@ impl Gnarl {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
         let mut fixable = false;
-        let mut blocked = false;
         let locks = yarn.locks()?;
         for dependent in locks.dependents(advisory.module_name())?.iter() {
             let tree_version = match advisory
@@ -389,7 +388,8 @@ impl Gnarl {
                 continue;
             }
 
-            blocked = true;
+            // Blocked range: escalate via parent advisory; still reset if another
+            // range is within-range fixable (partial win).
             if dependent.source() == "npm" {
                 advisories.push(
                     self.create_advisory(
@@ -412,7 +412,7 @@ impl Gnarl {
             }
         }
 
-        if fixable && !blocked && !self.reset.contains(advisory.module_name()) {
+        if fixable && !self.reset.contains(advisory.module_name()) {
             return Ok(true);
         }
 
