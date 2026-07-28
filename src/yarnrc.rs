@@ -99,17 +99,21 @@ fn write_text(path: &PathBuf, text: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Yarn-style block:
+/// Yarn-style block (LF). Prefer for stdout; file saves use [`pretty_ignore_block_with_newline`].
 /// ```yaml
 /// npmAuditIgnoreAdvisories:
 ///   - "123"
 /// ```
 pub(crate) fn pretty_ignore_block(ids: &[String]) -> String {
-    let mut block = String::from("npmAuditIgnoreAdvisories:\n");
+    pretty_ignore_block_with_newline(ids, "\n")
+}
+
+fn pretty_ignore_block_with_newline(ids: &[String], newline: &str) -> String {
+    let mut block = format!("npmAuditIgnoreAdvisories:{newline}");
     for id in ids {
         block.push_str("  - ");
         block.push_str(&format_yaml_string(id));
-        block.push('\n');
+        block.push_str(newline);
     }
     block
 }
@@ -118,14 +122,29 @@ fn format_yaml_string(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// CRLF if the text contains any `\r\n`, otherwise LF.
+fn detect_newline(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Replace or remove the `npmAuditIgnoreAdvisories` block while leaving all other
 /// text (comments, blank lines, key order, quoting) untouched.
 fn splice_ignore_block(original: &str, ids: &[String]) -> String {
+    let newline = detect_newline(original);
     let (before, after) = split_around_ignore_block(original);
     if ids.is_empty() {
-        return join_preserving_newlines(&before, "", &after);
+        return join_preserving_newlines(&before, "", &after, newline);
     }
-    join_preserving_newlines(&before, &pretty_ignore_block(ids), &after)
+    join_preserving_newlines(
+        &before,
+        &pretty_ignore_block_with_newline(ids, newline),
+        &after,
+        newline,
+    )
 }
 
 fn split_around_ignore_block(original: &str) -> (String, String) {
@@ -184,23 +203,24 @@ fn is_yaml_list_item(trimmed: &str) -> bool {
     trimmed.starts_with("- ") || trimmed == "-"
 }
 
-fn join_preserving_newlines(before: &str, middle: &str, after: &str) -> String {
+fn join_preserving_newlines(before: &str, middle: &str, after: &str, newline: &str) -> String {
     let mut out = String::new();
     out.push_str(before);
     if !middle.is_empty() {
         if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
+            out.push_str(newline);
         }
         out.push_str(middle);
     }
     if !after.is_empty() {
-        if !out.is_empty() && !out.ends_with('\n') && !after.starts_with('\n') {
-            out.push('\n');
+        if !out.is_empty() && !out.ends_with('\n') && !after.starts_with('\n') && !after.starts_with('\r')
+        {
+            out.push_str(newline);
         }
         out.push_str(after);
     }
     if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+        out.push_str(newline);
     }
     out
 }
@@ -258,7 +278,7 @@ compressionLevel: mixed
 
     fn text_without_ignore_block(text: &str) -> String {
         let (before, after) = split_around_ignore_block(text);
-        join_preserving_newlines(&before, "", &after)
+        join_preserving_newlines(&before, "", &after, detect_newline(text))
     }
 
     #[test]
@@ -488,5 +508,58 @@ compressionLevel: mixed
             value_to_id(&Value::Number(serde_yaml::Number::from(1090865u64))),
             Some("1090865".to_owned())
         );
+    }
+
+    fn is_crlf_file(text: &str) -> bool {
+        text.contains("\r\n") && !text.replace("\r\n", "").contains('\n')
+    }
+
+    #[test]
+    fn save_preserves_crlf_line_endings_in_ignore_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        let original = "# keep\r\nnodeLinker: node-modules\r\nnpmMinimalAgeGate: 1d\r\nnpmAuditIgnoreAdvisories:\r\n  - \"1111111\"\r\n  - \"2222222\"\r\n  - \"GHSA-xxxx-yyyy-zzzz\"\r\ncompressionLevel: mixed\r\n";
+        assert!(is_crlf_file(original));
+        fs::write(&path, original).unwrap();
+
+        let before_text = text_without_ignore_block(&fs::read_to_string(&path).unwrap());
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        assert!(yarnrc.remove_npm_audit_ignore_advisory("1111111"));
+        yarnrc.save().unwrap();
+
+        let after_text = fs::read_to_string(&path).unwrap();
+        assert!(is_crlf_file(&after_text), "save introduced LF-only newlines: {after_text:?}");
+        assert_eq!(text_without_ignore_block(&after_text), before_text);
+        assert!(after_text.contains(
+            "npmAuditIgnoreAdvisories:\r\n  - \"2222222\"\r\n  - \"GHSA-xxxx-yyyy-zzzz\"\r\n"
+        ));
+        assert_eq!(
+            YarnRc::read(path).unwrap().npm_audit_ignore_advisories(),
+            vec!["2222222".to_owned(), "GHSA-xxxx-yyyy-zzzz".to_owned()]
+        );
+    }
+
+    #[test]
+    fn save_appends_ignore_block_with_crlf_when_file_uses_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        let original = "# hi\r\nnodeLinker: pnp\r\nnpmMinimalAgeGate: 1d\r\n";
+        fs::write(&path, original).unwrap();
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        yarnrc.set_npm_audit_ignore_advisories(&["9999999".to_owned()]);
+        yarnrc.save().unwrap();
+
+        let after_text = fs::read_to_string(&path).unwrap();
+        assert!(is_crlf_file(&after_text), "save introduced LF-only newlines: {after_text:?}");
+        assert!(after_text.ends_with("npmAuditIgnoreAdvisories:\r\n  - \"9999999\"\r\n"));
+    }
+
+    #[test]
+    fn detect_newline_prefers_crlf_when_present() {
+        assert_eq!(detect_newline("a\nb\n"), "\n");
+        assert_eq!(detect_newline("a\r\nb\r\n"), "\r\n");
+        assert_eq!(detect_newline("a\nb\r\n"), "\r\n");
     }
 }
