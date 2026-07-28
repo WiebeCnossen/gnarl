@@ -100,7 +100,11 @@ pub struct Advisory {
 fn normalize_advisory_id(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .map(|u| u.to_string())
+            .or_else(|| n.as_i64().map(|i| i.to_string()))
+            .unwrap_or_else(|| n.to_string()),
         serde_json::Value::Bool(b) => b.to_string(),
         other => other.to_string().trim_matches('"').to_owned(),
     }
@@ -217,5 +221,25 @@ mod tests {
         assert!(Severity::Critical.meets_threshold(Severity::High));
         assert!(!Severity::Moderate.meets_threshold(Severity::High));
         assert!(Severity::Info.meets_threshold(Severity::Info));
+    }
+
+    fn sample_audit_line(id_json: &str) -> String {
+        format!(
+            r#"{{"value":"left-pad","children":{{"ID":{id_json},"Issue":"x","Severity":"high","Vulnerable Versions":"<1.0.0","Tree Versions":["0.0.1"],"Dependents":["pkg@npm:1.0.0"]}}}}"#
+        )
+    }
+
+    #[test]
+    fn advisory_id_accepts_integer_or_string_and_matches() {
+        let from_int = Advisory::parse(&sample_audit_line("1090865")).unwrap();
+        let from_str = Advisory::parse(&sample_audit_line(r#""1090865""#)).unwrap();
+        assert_eq!(from_int.id(), "1090865");
+        assert_eq!(from_str.id(), "1090865");
+        assert_eq!(from_int.id(), from_str.id());
+        // Same canonical form yarnrc uses for unquoted integer ignore entries.
+        assert_eq!(
+            normalize_advisory_id(&serde_json::json!(1090865)),
+            "1090865"
+        );
     }
 }

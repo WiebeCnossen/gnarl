@@ -208,7 +208,10 @@ fn join_preserving_newlines(before: &str, middle: &str, after: &str) -> String {
 fn value_to_id(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
+        Value::Number(n) => n
+            .as_u64()
+            .map(|u| u.to_string())
+            .or_else(|| n.as_i64().map(|i| i.to_string())),
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
@@ -352,6 +355,138 @@ compressionLevel: mixed
         assert_eq!(
             pretty_ignore_block(&["111".to_owned(), "GHSA-ab".to_owned()]),
             "npmAuditIgnoreAdvisories:\n  - \"111\"\n  - \"GHSA-ab\"\n"
+        );
+    }
+
+    #[test]
+    fn reads_unquoted_integer_and_mixed_ignore_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        fs::write(
+            &path,
+            "nodeLinker: node-modules\nnpmAuditIgnoreAdvisories:\n  - 1090865\n  - \"2222222\"\n  - GHSA-xxxx-yyyy-zzzz\n  - 3333333\n",
+        )
+        .unwrap();
+
+        let yarnrc = YarnRc::read(path).unwrap();
+        assert_eq!(
+            yarnrc.npm_audit_ignore_advisories(),
+            vec![
+                "1090865".to_owned(),
+                "2222222".to_owned(),
+                "GHSA-xxxx-yyyy-zzzz".to_owned(),
+                "3333333".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_flow_style_integer_ignore_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        fs::write(
+            &path,
+            "npmAuditIgnoreAdvisories: [1090865, \"2222222\", 3333333]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            YarnRc::read(path).unwrap().npm_audit_ignore_advisories(),
+            vec![
+                "1090865".to_owned(),
+                "2222222".to_owned(),
+                "3333333".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_and_save_integer_ignore_rewrites_quoted_and_preserves_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        let original = "# keep\nnodeLinker: node-modules\nnpmMinimalAgeGate: 1d\nnpmAuditIgnoreAdvisories:\n  - 1111111\n  - 2222222\n  - GHSA-xxxx-yyyy-zzzz\ncompressionLevel: mixed\n";
+        fs::write(&path, original).unwrap();
+
+        let before_text = text_without_ignore_block(&fs::read_to_string(&path).unwrap());
+        let before = mapping_without_ignores(&read_root(&path));
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        assert!(yarnrc.remove_npm_audit_ignore_advisory("1111111"));
+        yarnrc.save().unwrap();
+
+        let after_text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text_without_ignore_block(&after_text), before_text);
+        assert!(after_text.contains("# keep"));
+        assert!(
+            after_text
+                .contains("npmAuditIgnoreAdvisories:\n  - \"2222222\"\n  - \"GHSA-xxxx-yyyy-zzzz\"\n")
+        );
+        assert_eq!(mapping_without_ignores(&read_root(&path)), before);
+        assert_eq!(
+            YarnRc::read(path).unwrap().npm_audit_ignore_advisories(),
+            vec!["2222222".to_owned(), "GHSA-xxxx-yyyy-zzzz".to_owned()]
+        );
+    }
+
+    #[test]
+    fn clear_and_restore_integer_ignores_like_unfiltered_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        fs::write(
+            &path,
+            "nodeLinker: node-modules\nnpmAuditIgnoreAdvisories:\n  - 1090865\n  - \"2222222\"\n",
+        )
+        .unwrap();
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        let saved = yarnrc.npm_audit_ignore_advisories();
+        assert_eq!(
+            saved,
+            vec!["1090865".to_owned(), "2222222".to_owned()]
+        );
+
+        yarnrc.set_npm_audit_ignore_advisories(&[]);
+        yarnrc.save().unwrap();
+        assert!(
+            YarnRc::read(path.clone())
+                .unwrap()
+                .npm_audit_ignore_advisories()
+                .is_empty()
+        );
+
+        yarnrc.set_npm_audit_ignore_advisories(&saved);
+        yarnrc.save().unwrap();
+        assert_eq!(
+            YarnRc::read(path).unwrap().npm_audit_ignore_advisories(),
+            saved
+        );
+    }
+
+    #[test]
+    fn integer_ignore_id_matches_string_for_hygiene_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        fs::write(
+            &path,
+            "npmAuditIgnoreAdvisories:\n  - 1090865\n  - \"7777777\"\n",
+        )
+        .unwrap();
+
+        let ignores = YarnRc::read(path).unwrap().npm_audit_ignore_advisories();
+        let existing: std::collections::HashSet<String> = ignores.into_iter().collect();
+
+        // Audit JSON integer ID normalized the same way as yarnrc integer entry.
+        assert!(existing.contains("1090865"));
+        assert!(existing.contains("7777777"));
+        assert!(!existing.contains("9999999"));
+    }
+
+    #[test]
+    fn value_to_id_rejects_non_integer_numbers() {
+        assert_eq!(value_to_id(&Value::Number(serde_yaml::Number::from(1.5))), None);
+        assert_eq!(
+            value_to_id(&Value::Number(serde_yaml::Number::from(1090865u64))),
+            Some("1090865".to_owned())
         );
     }
 }
