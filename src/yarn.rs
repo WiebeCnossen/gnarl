@@ -176,14 +176,20 @@ impl Yarn {
             }
 
             let (name, tail) = parse::split_name(&package).unwrap_or((&package, "*"));
-            let range = parse::parse_range(tail)?;
+            // Bare package keys (no `@…`) apply to every request range for that name.
+            let match_all_ranges = tail == "*";
+            // Yarn Berry descriptor keys look like `pkg@npm:^1.1.7`; strip the protocol.
+            let range = match parse::parse_qualified_range(tail) {
+                Ok((_, range)) => range,
+                Err(_) => parse::parse_range(tail)?,
+            };
             let requested_range = parse::parse_range(&requested)?;
             let mut needed = false;
 
             // warn if any resolution has a dependency with a higher minimum version than range
             if let Some(range_min_version) = requested_range.min_version() {
                 for dependency in lock_dependencies.iter().filter(|d| {
-                    d.name() == name && (d.request().eq(&range) || tail == "*")
+                    d.name() == name && (d.request().eq(&range) || match_all_ranges)
                 }) {
                     if matches!(
                         dependency.request().outside(
