@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "gnarl"
-version = "2.2.2"
+version = "2.2.3"
 dependencies = [
  "chrono",
  "nodejs-semver",

@@ -1,7 +1,16 @@
 [package]
 name = "gnarl"
-version = "2.2.2"
+version = "2.2.3"
 edition = "2024"
+repository = "https://github.com/WiebeCnossen/gnarl/"
+authors = ["Wiebe Cnossen <wiebe.cnossen@gmail.com>"]
+description = "the yarn v4 companion tool"
+
+[package.metadata.wix]
+upgrade-guid = "D803CF97-EA1E-42F9-A4A5-92B5B5ADF35C"
+path-guid = "6D7C896F-EDB4-4F72-8F7C-9B352963EB9B"
+license = false
+eula = false
 
 [lib]
 name = "gnarl"
@@ -23,3 +32,8 @@ chrono = "0.4.44"
 
 [dev-dependencies]
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
