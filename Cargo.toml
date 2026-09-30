@@ -1,6 +1,6 @@
 [package]
 name = "gnarl"
-version = "2.2.3"
+version = "3.0.0"
 edition = "2024"
 repository = "https://github.com/WiebeCnossen/gnarl/"
 authors = ["Wiebe Cnossen <wiebe.cnossen@gmail.com>"]
@@ -29,6 +29,9 @@ regex = "1.10"
 reqwest = { version = "0.13", features = ["blocking"] }
 which = "8.0"
 chrono = "0.4.44"
+ratatui = "0.29"
+crossterm = "0.28"
+arboard = "3"
 
 [dev-dependencies]
 tempfile = "3"

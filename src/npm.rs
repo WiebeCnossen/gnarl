@@ -4,7 +4,10 @@ use nodejs_semver::{Range, Version};
 use reqwest::blocking::Client;
 use serde::Deserialize;
 
-use crate::{Error, out_npm, parse};
+use crate::{
+    Error, parse,
+    ui::{ActivityKind, SharedReporter, UiEvent, stdout_reporter},
+};
 
 #[derive(Deserialize)]
 pub struct PackumentVersionDto {
@@ -57,11 +60,8 @@ impl Packument {
             .find(|v| &v.version == version)
             .ok_or(format!("Version {} not found", version).into())
     }
-}
 
-impl TryFrom<PackumentDto> for Packument {
-    type Error = crate::Error;
-    fn try_from(dto: PackumentDto) -> Result<Self, Self::Error> {
+    fn from_dto(dto: PackumentDto, reporter: &dyn crate::ui::Reporter) -> Result<Self, Error> {
         let time = dto
             .time
             .into_iter()
@@ -79,16 +79,22 @@ impl TryFrom<PackumentDto> for Packument {
             .flat_map(|(version, ver_dto)| {
                 if let Some(&time) = time.get(&version) {
                     if time >= now_minus_1_day {
-                        out_npm!(
-                            "{}@{} disregarded until {}",
-                            dto.name,
-                            version,
-                            time + chrono::Duration::days(1)
-                        );
+                        reporter.emit(UiEvent::Activity {
+                            kind: ActivityKind::Npm,
+                            message: format!(
+                                "{}@{} disregarded until {}",
+                                dto.name,
+                                version,
+                                time + chrono::Duration::days(1)
+                            ),
+                        });
                         return None;
                     }
                 } else {
-                    out_npm!("{}@{} has no release date", dto.name, version);
+                    reporter.emit(UiEvent::Activity {
+                        kind: ActivityKind::Npm,
+                        message: format!("{}@{} has no release date", dto.name, version),
+                    });
                     return None;
                 }
 
@@ -121,10 +127,15 @@ impl TryFrom<PackumentDto> for Packument {
 pub struct Npm {
     client: Client,
     packuments: HashMap<String, Packument>,
+    reporter: SharedReporter,
 }
 
 impl Npm {
     pub fn new() -> Result<Self, crate::Error> {
+        Self::with_reporter(stdout_reporter())
+    }
+
+    pub fn with_reporter(reporter: SharedReporter) -> Result<Self, crate::Error> {
         let client = Client::builder()
             .user_agent("gnarl/2.0.0 (https://github.com/WiebeCnossen/gnarl)")
             .build()?;
@@ -132,6 +143,7 @@ impl Npm {
         Ok(Self {
             client,
             packuments: HashMap::new(),
+            reporter,
         })
     }
 
@@ -140,12 +152,16 @@ impl Npm {
             return Ok(());
         }
 
-        out_npm!("query {}", package);
-        let url = format!("https://registry.npmjs.org/{}", package);
+        self.reporter.emit(UiEvent::Activity {
+            kind: ActivityKind::Npm,
+            message: format!("query {package}"),
+        });
+        let url = format!("https://registry.npmjs.org/{package}");
         let response = self.client.get(&url).send()?.error_for_status()?;
         let packument: PackumentDto = serde_json::from_reader(response)?;
-        self.packuments
-            .insert(packument.name.to_owned(), packument.try_into()?);
+        let name = packument.name.clone();
+        let packument = Packument::from_dto(packument, &*self.reporter)?;
+        self.packuments.insert(name, packument);
         Ok(())
     }
 

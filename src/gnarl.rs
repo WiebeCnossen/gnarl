@@ -8,11 +8,13 @@ use crate::{
     check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
-    out_fix, out_hit, out_indent, out_info,
     package::Dependency,
     parse,
+    ui::{
+        ActivityKind, SharedReporter, UiEvent, format_ignore_yaml, format_resolution_line,
+        format_section_lines, stdout_reporter,
+    },
     yarn::Yarn,
-    yarnrc::pretty_ignore_block,
 };
 
 pub struct Gnarl {
@@ -21,6 +23,7 @@ pub struct Gnarl {
     reset: HashSet<String>,
     /// Printed `{package} blocked by {other}@{version}` keys for this process run.
     blocked_by: HashSet<String>,
+    reporter: SharedReporter,
 }
 
 struct SuggestedFix {
@@ -29,16 +32,26 @@ struct SuggestedFix {
 
 impl Gnarl {
     pub fn new(options: Options) -> Result<Self, Error> {
+        Self::with_reporter(options, stdout_reporter())
+    }
+
+    pub fn with_reporter(options: Options, reporter: SharedReporter) -> Result<Self, Error> {
         Ok(Self {
             options,
-            npm: Npm::new()?,
+            npm: Npm::with_reporter(reporter.clone())?,
             reset: HashSet::new(),
             blocked_by: HashSet::new(),
+            reporter,
         })
     }
 
+    fn yarn(&self) -> Result<Yarn, Error> {
+        Yarn::with_reporter(self.options.severity(), self.reporter.clone())
+    }
+
     pub fn check(&mut self) -> Result<(), Error> {
-        let mut yarn = Yarn::new(self.options.severity())?;
+        self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Report));
+        let mut yarn = self.yarn()?;
 
         let advisories = yarn.audit()?;
         let mut deprecations = vec![];
@@ -47,12 +60,15 @@ impl Gnarl {
         let mut errors = vec![];
         let mut ignore_suggestions = BTreeMap::new();
         for advisory in &advisories {
-            out_hit!(
-                "{}: {}@{}",
-                advisory.label(),
-                advisory.module_name(),
-                advisory.vulnerable_versions()
-            );
+            self.reporter.emit(UiEvent::Activity {
+                kind: ActivityKind::Hit,
+                message: format!(
+                    "{}: {}@{}",
+                    advisory.label(),
+                    advisory.module_name(),
+                    advisory.vulnerable_versions()
+                ),
+            });
         }
 
         let lock_len = {
@@ -134,57 +150,62 @@ impl Gnarl {
             deprecations.len(),
             fixes.len() + resolutions.len() + errors.len(),
         )
-        .print();
+        .emit(&*self.reporter);
 
         self.print_ignore_overview(&yarn)?;
 
-        print_section("deprecations", deprecations);
-        print_section(
+        emit_section(&*self.reporter, "deprecations", deprecations);
+        emit_section(
+            &*self.reporter,
             "fixes",
             fixes
                 .iter()
-                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v.version))
+                .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
         );
-        print_section(
+        emit_section(
+            &*self.reporter,
             "suggested resolutions",
             resolutions
                 .iter()
-                .map(|(k, v)| format!("\"{}\": \"^{}\",", k, v.version))
+                .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
         );
-        print_section("unresolved issues", errors);
+        emit_section(&*self.reporter, "unresolved issues", errors);
         self.print_suggested_ignores(&yarn, ignore_suggestions)?;
+        self.reporter.emit(UiEvent::ReportComplete);
+        self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Done));
 
         Ok(())
     }
 
-    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<(), Error> {
+    pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
         self.reset
             .extend(packages.iter().map(|p| p.as_ref().to_string()));
-        let dirty = Yarn::new(self.options.severity())?
-            .locks()?
-            .reset(packages)?;
-
-        if dirty && !self.options.no_install() {
-            self.auto()?;
-        }
-
-        Ok(())
+        let dirty = self.yarn()?.locks()?.reset(packages)?;
+        Ok(dirty && !self.options.no_install())
     }
 
     pub fn auto(&mut self) -> Result<(), Error> {
         let _: () = loop {
-            let mut yarn = Yarn::new(self.options.severity())?;
+            let mut yarn = self.yarn()?;
+            self.reporter
+                .emit(UiEvent::Phase(crate::ui::Phase::Install));
             yarn.install()?;
+            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Dedupe));
             yarn.dedupe()?;
 
             let mut dirty = false;
             let mut resets = vec![];
+            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Audit));
             let mut advisories = yarn.audit()?;
-            out_info!("{} advisories", advisories.len());
+            self.reporter.emit(UiEvent::Activity {
+                kind: ActivityKind::Info,
+                message: format!("{} advisories", advisories.len()),
+            });
             let mut done = HashSet::new();
 
+            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Fix));
             while let Some(advisory) = advisories.pop() {
                 if done.insert(format!("{} {}", advisory.id(), advisory.module_name()))
                     && self.fix(&mut yarn, &advisory, &mut advisories)?
@@ -204,11 +225,13 @@ impl Gnarl {
             }
         };
 
-        let mut yarn = Yarn::new(self.options.severity())?;
+        self.reporter
+            .emit(UiEvent::Phase(crate::ui::Phase::Hygiene));
+        let mut yarn = self.yarn()?;
         let resolutions_dirty = yarn.reset_resolutions()?;
         let ignore_resets = self.reset_ignored_advisories(&mut yarn)?;
         if (resolutions_dirty || !ignore_resets.is_empty()) && !self.options.no_install() {
-            let yarn = Yarn::new(self.options.severity())?;
+            let yarn = self.yarn()?;
             yarn.install()?;
             yarn.dedupe()?;
         }
@@ -243,7 +266,7 @@ impl Gnarl {
             }
         }
 
-        print_section("npmAuditIgnoreAdvisories", lines);
+        emit_section(&*self.reporter, "npmAuditIgnoreAdvisories", lines);
         Ok(())
     }
 
@@ -278,8 +301,10 @@ impl Gnarl {
             })
             .collect();
 
-        print_section("suggested ignores", lines);
-        print!("{}", pretty_ignore_block(&ids));
+        emit_section(&*self.reporter, "suggested ignores", lines);
+        self.reporter.emit(UiEvent::IgnoreYaml {
+            yaml: format_ignore_yaml(&ids),
+        });
         Ok(())
     }
 
@@ -302,7 +327,9 @@ impl Gnarl {
         for id in &ignores {
             match by_id.get(id) {
                 None => {
-                    out_fix!("drop orphan ignore {}", id);
+                    self.reporter.emit(UiEvent::Fix {
+                        message: format!("drop orphan ignore {id}"),
+                    });
                     if yarnrc.remove_npm_audit_ignore_advisory(id) {
                         yarnrc_dirty = true;
                     }
@@ -310,7 +337,9 @@ impl Gnarl {
                 Some(advisory) if advisory.is_deprecation() => {}
                 Some(advisory) => {
                     if self.within_range_resettable(yarn, advisory)? {
-                        out_fix!("drop ignore {} (within-range fix)", id);
+                        self.reporter.emit(UiEvent::Fix {
+                            message: format!("drop ignore {id} (within-range fix)"),
+                        });
                         if yarnrc.remove_npm_audit_ignore_advisory(id) {
                             yarnrc_dirty = true;
                         }
@@ -417,7 +446,10 @@ impl Gnarl {
                     tree_version
                 );
                 if self.blocked_by.insert(message.clone()) {
-                    out_info!("{}", message);
+                    self.reporter.emit(UiEvent::Activity {
+                        kind: ActivityKind::Info,
+                        message,
+                    });
                 }
             }
         }
@@ -435,11 +467,14 @@ impl Gnarl {
                 &parse::parse_range("*")?,
             )
         {
-            out_info!(
-                "{}@{} has no fix",
-                advisory.module_name(),
-                advisory.vulnerable_versions()
-            );
+            self.reporter.emit(UiEvent::Activity {
+                kind: ActivityKind::Info,
+                message: format!(
+                    "{}@{} has no fix",
+                    advisory.module_name(),
+                    advisory.vulnerable_versions()
+                ),
+            });
         }
 
         Ok(false)
@@ -522,17 +557,15 @@ fn get_resolution<'a>(
     })
 }
 
-fn print_section(title: &str, mut lines: Vec<String>) {
+fn emit_section(reporter: &dyn crate::ui::Reporter, title: &str, lines: Vec<String>) {
+    let lines = format_section_lines(lines);
     if lines.is_empty() {
         return;
     }
-
-    out_info!("{}", title);
-    lines.sort_unstable();
-    lines.dedup();
-    for line in lines {
-        out_indent!("{}", line);
-    }
+    reporter.emit(UiEvent::Section {
+        title: title.to_owned(),
+        lines,
+    });
 }
 
 struct IgnoreSuggestion {

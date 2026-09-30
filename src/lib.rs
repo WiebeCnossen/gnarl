@@ -8,6 +8,7 @@ pub mod npm;
 pub mod package;
 pub mod parse;
 pub mod project;
+pub mod ui;
 pub mod ux;
 pub mod yarn;
 pub mod yarnrc;

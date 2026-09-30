@@ -8,7 +8,12 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{Package, out_fix, package::Dependency, parse};
+use crate::{
+    Package,
+    package::Dependency,
+    parse,
+    ui::{SharedReporter, UiEvent, stdout_reporter},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct YarnLockV2 {
@@ -25,10 +30,15 @@ pub struct Locks {
     entries: Vec<Lock>,
     by_name: HashMap<String, Vec<usize>>,
     dependents_of: HashMap<String, Vec<Dependency>>,
+    reporter: SharedReporter,
 }
 
 impl Locks {
     pub fn read(path: PathBuf) -> Result<Self, Error> {
+        Self::read_with_reporter(path, stdout_reporter())
+    }
+
+    pub fn read_with_reporter(path: PathBuf, reporter: SharedReporter) -> Result<Self, Error> {
         let content = fs::read_to_string(&path)?;
         let root: YarnLockV2 = serde_yaml::from_str(&content)?;
         let mut locks = Self {
@@ -37,6 +47,7 @@ impl Locks {
             entries: Vec::new(),
             by_name: HashMap::new(),
             dependents_of: HashMap::new(),
+            reporter,
         };
         locks.rebuild_indexes()?;
         Ok(locks)
@@ -84,7 +95,9 @@ impl Locks {
             return false;
         }
 
-        out_fix!("reset {}", package);
+        self.reporter.emit(UiEvent::Fix {
+            message: format!("reset {package}"),
+        });
         true
     }
 

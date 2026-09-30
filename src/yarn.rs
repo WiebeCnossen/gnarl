@@ -4,9 +4,10 @@ use crate::{
     Error,
     audit::{Advisory, Severity},
     locks::Locks,
-    out_fix, out_hit, out_info, out_yarn, parse,
     package::Dependency,
+    parse,
     project::Project,
+    ui::{ActivityKind, SharedReporter, UiEvent, stdout_reporter},
     yarnrc::YarnRc,
 };
 use std::{
@@ -27,6 +28,7 @@ pub struct Yarn {
     project: Project,
     severity: Severity,
     locks: Option<Locks>,
+    reporter: SharedReporter,
 }
 
 const PACKAGE_NOT_FOUND: &str = "package.json not found in current directory";
@@ -34,6 +36,10 @@ const LOCK_NOT_FOUND: &str = "yarn.lock not found in current directory";
 
 impl Yarn {
     pub fn new(severity: Severity) -> Result<Self, Error> {
+        Self::with_reporter(severity, stdout_reporter())
+    }
+
+    pub fn with_reporter(severity: Severity, reporter: SharedReporter) -> Result<Self, Error> {
         let aikido_path = which::which(AIKIDO_YARN_NAME).ok();
         let safe_path = which::which(SAFE_CHAIN_NAME).ok();
         let yarn_path = which::which(YARN_NAME)?;
@@ -58,6 +64,7 @@ impl Yarn {
             project,
             severity,
             locks: None,
+            reporter,
         })
     }
 
@@ -84,7 +91,10 @@ impl Yarn {
             _ if args.len() > 1 => (&self.yarn_path, "audit"),
             _ => (&self.yarn_path, args[0]),
         };
-        out_yarn!("{}", name);
+        self.reporter.emit(UiEvent::Activity {
+            kind: ActivityKind::Yarn,
+            message: name.to_owned(),
+        });
         let output = Command::new(executable).args(args).output()?;
         if !output.status.success() && output.stdout.is_empty() {
             return Err(String::from_utf8_lossy(&output.stderr).to_string().into());
@@ -157,7 +167,10 @@ impl Yarn {
 
     pub fn locks(&mut self) -> Result<&mut Locks, Error> {
         if self.locks.is_none() {
-            self.locks = Some(Locks::read(self.lock_path.clone())?);
+            self.locks = Some(Locks::read_with_reporter(
+                self.lock_path.clone(),
+                self.reporter.clone(),
+            )?);
         }
         Ok(self.locks.as_mut().unwrap())
     }
@@ -199,12 +212,13 @@ impl Yarn {
                         ),
                         Ok(true)
                     ) {
-                        out_hit!(
-                            "{} resolved to {} but request is {}",
-                            name,
-                            range_min_version,
-                            dependency.request()
-                        );
+                        self.reporter.emit(UiEvent::Activity {
+                            kind: ActivityKind::Hit,
+                            message: format!(
+                                "{name} resolved to {range_min_version} but request is {}",
+                                dependency.request()
+                            ),
+                        });
                         continue;
                     }
 
@@ -216,12 +230,13 @@ impl Yarn {
                         ),
                         Ok(true)
                     ) {
-                        out_info!(
-                            "{}@{} forced to {}",
-                            name,
-                            dependency.request(),
-                            requested_range
-                        );
+                        self.reporter.emit(UiEvent::Activity {
+                            kind: ActivityKind::Info,
+                            message: format!(
+                                "{name}@{} forced to {requested_range}",
+                                dependency.request()
+                            ),
+                        });
                         needed = true;
                         continue;
                     }
@@ -229,21 +244,23 @@ impl Yarn {
                     // Check if the upper bound of requested range is less than the lower bound of dependency.request()
                     match is_capped(dependency.request(), &requested_range) {
                         Ordering::Less => {
-                            out_info!(
-                                "{}@{} capped to {}",
-                                name,
-                                dependency.request(),
-                                requested_range
-                            );
+                            self.reporter.emit(UiEvent::Activity {
+                                kind: ActivityKind::Info,
+                                message: format!(
+                                    "{name}@{} capped to {requested_range}",
+                                    dependency.request()
+                                ),
+                            });
                             needed = true;
                         }
                         Ordering::Greater => {
-                            out_info!(
-                                "{}@{} expanded to {}",
-                                name,
-                                dependency.request(),
-                                requested_range
-                            );
+                            self.reporter.emit(UiEvent::Activity {
+                                kind: ActivityKind::Info,
+                                message: format!(
+                                    "{name}@{} expanded to {requested_range}",
+                                    dependency.request()
+                                ),
+                            });
                         }
                         _ => {}
                     }
@@ -251,7 +268,9 @@ impl Yarn {
             }
 
             if !needed {
-                out_fix!("drop resolution for {}", package);
+                self.reporter.emit(UiEvent::Fix {
+                    message: format!("drop resolution for {package}"),
+                });
                 self.project.reset_resolution(&package);
                 dirty = true;
             }

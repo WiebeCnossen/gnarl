@@ -1,8 +1,6 @@
-## Purpose
+# Spec Delta
 
-When `auto` loops after resets, avoid reprinting the same `{package} blocked by {other-package}@{version}` info line on later iterations of the same program run.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Blocked-by messages are unique across auto iterations
 
