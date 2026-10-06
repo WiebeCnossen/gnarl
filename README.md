@@ -9,7 +9,7 @@ This is a complete and incompatible rewrite of the Go version.
 # Usage
 
 ```
-gnarl [check | reset <packages> | auto] [-s <severity>] [--raw] [--auto-ignore] [-x|--install-on-change]
+gnarl [check | reset <packages> | auto] [-s|--severity <severity>] [--raw] [--auto-ignore] [-x|--install-on-change]
 ```
 
 ## Auto
@@ -28,13 +28,13 @@ This is the default operation. It will do
 10. run `check` (including ignore overview and suggested ignores)
 
 ```
-gnarl [-s <severity>]
+gnarl [-s|--severity <severity>]
 gnarl auto --raw --auto-ignore --install-on-change
 ```
 
 `--auto-ignore` is valid only on `auto` (including default `auto`). Advisory-driven reset and applied-ignore messages include severity. Within-range resets and deprecations do not affect the policy exit. A bot chooses pull/merge request vs direct push from that code; gnarl has no hosting client.
 
-Without `--auto-ignore`, suggested ignores stay paste-only. `--raw` only forces tagged stdout (no TUI), independent of `--auto-ignore`.
+Without `--auto-ignore`, suggested ignores stay paste-only on tagged stdout. On an interactive TTY Done screen, `[i]` / `[r]` copy suggested ignores / resolutions; `[I]` writes all suggested ignores to `.yarnrc.yml` (no install) and refreshes `check`; `[R]` writes all suggested resolutions to `package.json` then runs a full `auto` (install+dedupe first). `--raw` only forces tagged stdout (no TUI), independent of `--auto-ignore`.
 
 `-x` / `--install-on-change` skips the opening `install`+`dedupe` of `auto`. Install+dedupe still run after this process mutates `package.json` (unused resolutions) or `yarn.lock` (within-range reset, ignore-hygiene package reset, or a chained `reset`). Yarnrc-only writes (including `--auto-ignore`) do not trigger a refresh. Best practice for bots, after the job’s own `yarn install`, is `gnarl auto --raw --auto-ignore --install-on-change`. Interactive use after local dependency edits should omit the flag so `auto` still opens with install+dedupe.
 
@@ -60,10 +60,10 @@ Only runs an audit and checks what issues and fixes are available. It also:
 - prints `suggested resolutions` (outside-range) and unresolved issues without inline ignore annotations
 - when there are new ignore candidates (from suggested resolutions and unresolved issues, excluding IDs already in yarnrc), prints a `suggested ignores` section with the same enrichment form as the overview, followed by a paste-ready `npmAuditIgnoreAdvisories` YAML block of **new IDs only** (merge into `.yarnrc.yml` yourself)
 
-`check` does not modify `.yarnrc.yml`.
+`check` does not modify `.yarnrc.yml` or `package.json` on the tagged-stdout path. On the interactive Done screen, `[I]` / `[R]` apply suggestions as in Auto above.
 
 ```
-gnarl check [-s severity]
+gnarl check [-s|--severity <severity>]
 ```
 
 ## Reset

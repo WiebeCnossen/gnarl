@@ -29,6 +29,22 @@ impl RunStatus {
     }
 }
 
+/// Keep the higher `--auto-ignore` policy. Non-policy workers (`I`, `check`) leave `current`.
+pub fn merge_session_policy(
+    current: RunStatus,
+    next: RunStatus,
+    next_is_auto_ignore: bool,
+) -> RunStatus {
+    if !next_is_auto_ignore {
+        return current;
+    }
+    if next.policy_exit() >= current.policy_exit() {
+        next
+    } else {
+        current
+    }
+}
+
 /// Without `--auto-ignore`, newly found ignore severities MUST NOT change the exit.
 pub fn auto_ignore_status(auto_ignore: bool, max_new: Option<Severity>) -> RunStatus {
     if auto_ignore {
@@ -87,5 +103,21 @@ mod tests {
             14
         );
         assert_eq!(auto_ignore_status(true, None).policy_exit(), 0);
+    }
+
+    #[test]
+    fn merge_session_policy_keeps_earlier_auto_ignore_when_later_writes_none() {
+        let first = RunStatus::from_max_ignore_severity(Some(Severity::Critical));
+        let later = RunStatus::ok();
+        let merged = merge_session_policy(first, later, true);
+        assert_eq!(merged.policy_exit(), 14);
+        assert_eq!(
+            merge_session_policy(first, RunStatus::ok(), false).policy_exit(),
+            14
+        );
+        assert_eq!(
+            merge_session_policy(RunStatus::ok(), first, true).policy_exit(),
+            14
+        );
     }
 }

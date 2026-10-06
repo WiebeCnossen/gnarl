@@ -32,7 +32,7 @@ impl Options {
                     auto_ignore = true;
                     args.remove(i);
                 }
-                "-s" => {
+                "-s" | "--severity" => {
                     severity = args[i + 1].parse()?;
                     args.remove(i);
                     args.remove(i);
@@ -142,14 +142,16 @@ pub fn help_lines() -> &'static [&'static str] {
     &[
         "the yarn v4 companion tool",
         "usage: gnarl [<auto | reset | check | info | help> <args>]",
-        "> gnarl [auto] [--raw] [--auto-ignore] [-x|--install-on-change] [-s <severity>]",
+        "> gnarl [auto] [--raw] [--auto-ignore] [-x|--install-on-change] [-s|--severity <severity>]",
         "> gnarl reset [--raw] [-x|--install-on-change] package-names...",
-        "> gnarl check [--raw]",
+        "> gnarl check [--raw] [-s|--severity <severity>]",
         "> gnarl info",
         "> gnarl help",
         "--raw  force tagged stdout even on a TTY",
         "--auto-ignore  on auto: persist suggested ignores; policy exit is max new-ignore severity",
         "-x, --install-on-change  skip opening install+dedupe; still refresh after this-run package.json or yarn.lock changes",
+        "-s, --severity  minimum audit severity (info, low, moderate, high, critical)",
+        "TTY Done: [i]/[r] copy ignores/resolutions; [I] write ignores to .yarnrc.yml; [R] write resolutions then full auto",
         "exit 0   success (no new ignores, or without --auto-ignore)",
         "exit 1   tool error",
         "exit 10  auto --auto-ignore: max new ignore is info",
@@ -194,6 +196,12 @@ mod tests {
         assert!(cmd.options().install_on_change());
         assert_eq!(cmd.options().severity(), Severity::High);
         assert!(!cmd.options().auto_ignore());
+    }
+
+    #[test]
+    fn parses_severity_long_form() {
+        let cmd = parse(&["auto", "--severity", "moderate"]);
+        assert_eq!(cmd.options().severity(), Severity::Moderate);
     }
 
     #[test]
@@ -284,6 +292,11 @@ mod tests {
         assert!(help.contains("skip opening install+dedupe"));
         assert!(help.contains("package.json"));
         assert!(help.contains("yarn.lock"));
+        assert!(help.contains("[I]"));
+        assert!(help.contains("[R]"));
+        assert!(help.contains("full auto"));
+        assert!(help.contains("--severity"));
+        assert!(help.contains("-s, --severity"));
     }
 
     #[test]
@@ -292,5 +305,8 @@ mod tests {
         assert!(readme.contains("gnarl auto --raw --auto-ignore --install-on-change"));
         assert!(readme.contains("--install-on-change"));
         assert!(readme.contains("`-x`"));
+        assert!(readme.contains("[I]"));
+        assert!(readme.contains("[R]"));
+        assert!(readme.contains("--severity"));
     }
 }

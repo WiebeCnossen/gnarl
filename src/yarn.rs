@@ -80,6 +80,13 @@ impl Yarn {
         self.project.resolutions().len()
     }
 
+    pub fn apply_suggested_resolutions(
+        &mut self,
+        entries: &[(String, String)],
+    ) -> Result<bool, Error> {
+        self.project.apply_suggested_resolutions(entries)
+    }
+
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
         let mut args = args.to_vec();
         let (executable, name) = match prefer_aikido {
@@ -144,7 +151,7 @@ impl Yarn {
     }
 
     fn run_audit(&self) -> Result<Output, Error> {
-        // Fetch all severities; gnarl applies `-s` itself so ignore hygiene can see
+        // Fetch all severities; gnarl applies `-s` / `--severity` itself so ignore hygiene can see
         // below-threshold advisories and not treat them as orphans.
         self.run(false, &["npm", "audit", "--json", "--recursive"])
     }

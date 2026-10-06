@@ -237,6 +237,14 @@ impl Gnarl {
                 .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
         );
+        let resolution_entries: Vec<(String, String)> = class
+            .resolutions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.version.to_string()))
+            .collect();
+        self.reporter.emit(UiEvent::SuggestedResolutions {
+            entries: resolution_entries,
+        });
         emit_section(
             &*self.reporter,
             "suggested resolutions",
@@ -318,7 +326,8 @@ impl Gnarl {
         }
 
         let policy = if self.options.auto_ignore() {
-            self.persist_suggested_ignores()?
+            let written = self.write_classified_ignores()?;
+            status::auto_ignore_status(true, written.max_severity)
         } else {
             RunStatus::ok()
         };
@@ -326,31 +335,56 @@ impl Gnarl {
         Ok(policy)
     }
 
-    fn persist_suggested_ignores(&mut self) -> Result<RunStatus, Error> {
+    fn write_classified_ignores(&mut self) -> Result<IgnoreWrite, Error> {
         let mut yarn = self.yarn()?;
         let advisories = self.filtered_advisories(&yarn)?;
         let class = self.classify(&mut yarn, advisories, false)?;
         let mut yarnrc = yarn.yarnrc()?;
         let existing: HashSet<String> = yarnrc.npm_audit_ignore_advisories().into_iter().collect();
         let to_write = new_ignore_suggestions(&class.ignore_suggestions, &existing);
-        if to_write.is_empty() {
-            return Ok(RunStatus::ok());
-        }
+        save_ignore_suggestions(&*self.reporter, &mut yarnrc, &to_write)
+    }
 
-        let mut max_sev: Option<Severity> = None;
-        let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
-        for suggestion in &to_write {
-            max_sev = Some(match max_sev {
-                None => suggestion.severity,
-                Some(current) => current.max(suggestion.severity),
-            });
-            self.reporter.emit(UiEvent::Fix {
-                message: ignore_fix_message(suggestion),
-            });
+    /// Persist snapshot ignore IDs then `check`. Never returns policy 10–14.
+    pub fn apply_ignores_then_check(&mut self, ids: &[String]) -> Result<RunStatus, Error> {
+        if !ids.is_empty() {
+            let yarn = self.yarn()?;
+            let unfiltered = self.unfiltered_advisories(&yarn)?;
+            let mut by_id: BTreeMap<String, IgnoreSuggestion> = BTreeMap::new();
+            for advisory in &unfiltered {
+                if ids.iter().any(|id| id == advisory.id()) {
+                    record_ignore_suggestion(&mut by_id, advisory);
+                }
+            }
+            let to_write: Vec<IgnoreSuggestion> = ids
+                .iter()
+                .map(|id| {
+                    by_id.get(id).cloned().unwrap_or_else(|| IgnoreSuggestion {
+                        id: id.clone(),
+                        severity: Severity::Info,
+                        module_name: String::new(),
+                        vulnerable_versions: String::new(),
+                    })
+                })
+                .collect();
+            let refs: Vec<&IgnoreSuggestion> = to_write.iter().collect();
+            let mut yarnrc = yarn.yarnrc()?;
+            save_ignore_suggestions(&*self.reporter, &mut yarnrc, &refs)?;
         }
-        yarnrc.merge_npm_audit_ignore_advisories(&ids);
-        yarnrc.save()?;
-        Ok(status::auto_ignore_status(true, max_sev))
+        self.check()?;
+        Ok(RunStatus::ok())
+    }
+
+    /// Write snapshot resolutions then run full `auto` with opening refresh.
+    pub fn apply_resolutions_then_auto(
+        &mut self,
+        entries: &[(String, String)],
+    ) -> Result<RunStatus, Error> {
+        if !entries.is_empty() {
+            let mut yarn = self.yarn()?;
+            yarn.apply_suggested_resolutions(entries)?;
+        }
+        self.auto(APPLY_RESOLUTIONS_REFRESH_FIRST)
     }
 
     fn print_ignore_overview(&mut self, yarn: &Yarn) -> Result<(), Error> {
@@ -396,6 +430,8 @@ impl Gnarl {
             .collect();
 
         let to_write = new_ignore_suggestions(&suggestions, &existing);
+        let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
+        self.reporter.emit(UiEvent::SuggestedIgnoreIds { ids: ids.clone() });
         if to_write.is_empty() {
             return Ok(());
         }
@@ -409,7 +445,6 @@ impl Gnarl {
                 )
             })
             .collect();
-        let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
 
         emit_section(&*self.reporter, "suggested ignores", lines);
         self.reporter.emit(UiEvent::IgnoreYaml {
@@ -685,11 +720,51 @@ fn emit_section(reporter: &dyn crate::ui::Reporter, title: &str, lines: Vec<Stri
     });
 }
 
+#[derive(Clone)]
 struct IgnoreSuggestion {
     id: String,
     severity: Severity,
     module_name: String,
     vulnerable_versions: String,
+}
+
+struct IgnoreWrite {
+    max_severity: Option<Severity>,
+}
+
+fn save_ignore_suggestions(
+    reporter: &dyn crate::ui::Reporter,
+    yarnrc: &mut crate::yarnrc::YarnRc,
+    to_write: &[&IgnoreSuggestion],
+) -> Result<IgnoreWrite, Error> {
+    if to_write.is_empty() {
+        return Ok(IgnoreWrite {
+            max_severity: None,
+        });
+    }
+
+    let mut max_sev: Option<Severity> = None;
+    let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
+    for suggestion in to_write {
+        if !suggestion.module_name.is_empty() {
+            max_sev = Some(match max_sev {
+                None => suggestion.severity,
+                Some(current) => current.max(suggestion.severity),
+            });
+            reporter.emit(UiEvent::Fix {
+                message: ignore_fix_message(suggestion),
+            });
+        } else {
+            reporter.emit(UiEvent::Fix {
+                message: format!("ignore {}", suggestion.id),
+            });
+        }
+    }
+    yarnrc.merge_npm_audit_ignore_advisories(&ids);
+    yarnrc.save()?;
+    Ok(IgnoreWrite {
+        max_severity: max_sev,
+    })
 }
 
 fn ignore_fix_message(suggestion: &IgnoreSuggestion) -> String {
@@ -751,6 +826,8 @@ fn add_fix(
             version: resolution.to_owned(),
         });
 }
+
+pub(crate) const APPLY_RESOLUTIONS_REFRESH_FIRST: bool = true;
 
 pub(crate) fn should_open_with_refresh(install_on_change: bool, refresh_first: bool) -> bool {
     refresh_first || !install_on_change
@@ -925,5 +1002,40 @@ mod tests {
         let filtered = filter_cached_audit(&all, &ignores, Severity::High);
         let ids: Vec<_> = filtered.iter().map(Advisory::id).collect();
         assert_eq!(ids, vec!["3"]);
+    }
+
+    #[test]
+    fn save_ignore_suggestions_merges_without_policy_for_interactive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        std::fs::write(&path, "nodeLinker: node-modules\n").unwrap();
+        let mut yarnrc = crate::yarnrc::YarnRc::read(path.clone()).unwrap();
+        let reporter = crate::ui::CollectingReporter::new();
+        let critical = suggestion("1111111", Severity::Critical);
+        let written =
+            save_ignore_suggestions(&reporter, &mut yarnrc, &[&critical]).unwrap();
+        assert_eq!(written.max_severity, Some(Severity::Critical));
+        assert_eq!(
+            auto_ignore_status(true, written.max_severity).policy_exit(),
+            14
+        );
+        assert_eq!(RunStatus::ok().policy_exit(), 0);
+        assert!(yarnrc
+            .npm_audit_ignore_advisories()
+            .contains(&"1111111".to_string()));
+        let events = reporter.events();
+        assert!(events.iter().any(|e| matches!(e, UiEvent::Fix { .. })));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            UiEvent::Phase(crate::ui::Phase::Install | crate::ui::Phase::Dedupe)
+        )));
+    }
+
+    #[test]
+    fn apply_resolutions_continuation_always_opens_with_refresh() {
+        assert!(should_open_with_refresh(
+            true,
+            APPLY_RESOLUTIONS_REFRESH_FIRST
+        ));
     }
 }

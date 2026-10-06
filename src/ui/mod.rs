@@ -59,6 +59,14 @@ pub enum UiEvent {
     IgnoreYaml {
         yaml: String,
     },
+    /// Structured outside-range pins (package key + version, no caret). Stdout ignores this.
+    SuggestedResolutions {
+        entries: Vec<(String, String)>,
+    },
+    /// Structured suggested-ignore advisory IDs. Stdout ignores this.
+    SuggestedIgnoreIds {
+        ids: Vec<String>,
+    },
     ReportComplete,
     Error {
         message: String,

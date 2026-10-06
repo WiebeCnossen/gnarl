@@ -52,6 +52,9 @@ pub struct UiState {
     pub unresolved: Vec<String>,
     pub suggested_ignores: Vec<String>,
     pub ignore_yaml: Option<String>,
+    /// Package key + version (no caret) matching suggested resolution lines.
+    pub resolution_entries: Vec<(String, String)>,
+    pub ignore_apply_ids: Vec<String>,
     pub error: Option<String>,
     pub focus: PaneId,
     /// Focused pane fills the grid area (Enter); Esc restores the 2×2 layout.
@@ -92,6 +95,8 @@ impl UiState {
             unresolved: Vec::new(),
             suggested_ignores: Vec::new(),
             ignore_yaml: None,
+            resolution_entries: Vec::new(),
+            ignore_apply_ids: Vec::new(),
             error: None,
             focus: PaneId::Activity,
             maximized: false,
@@ -153,6 +158,12 @@ impl UiState {
             UiEvent::IgnoreYaml { yaml } => {
                 self.report_ready = true;
                 self.ignore_yaml = Some(yaml);
+            }
+            UiEvent::SuggestedResolutions { entries } => {
+                self.resolution_entries = entries;
+            }
+            UiEvent::SuggestedIgnoreIds { ids } => {
+                self.ignore_apply_ids = ids;
             }
             UiEvent::ReportComplete => {
                 self.report_ready = true;
@@ -285,16 +296,23 @@ impl UiState {
 
     fn copy_hints_line(&self, clipboard_status: Option<&str>) -> Option<String> {
         let mut copy_bits = Vec::new();
+        let mut apply_bits = Vec::new();
         if !self.suggested_resolutions.is_empty() {
             copy_bits.push("[r] resolutions");
+            apply_bits.push("[R] resolutions");
         }
         if self.ignore_yaml.is_some() {
             copy_bits.push("[i] ignores");
+            apply_bits.push("[I] ignores");
         }
         if copy_bits.is_empty() {
             return None;
         }
-        let mut line = format!("Copy: {}", copy_bits.join(" · "));
+        let mut line = format!(
+            "Copy: {} · Apply: {}",
+            copy_bits.join(" · "),
+            apply_bits.join(" · ")
+        );
         if let Some(status) = clipboard_status {
             line.push_str(&format!(" · ({status})"));
         }
@@ -316,6 +334,57 @@ impl UiState {
     pub fn is_live_auto(&self) -> bool {
         matches!(self.verb, Verb::Auto)
     }
+
+    pub fn done_command(&self, c: char, worker_running: bool) -> Option<DoneCommand> {
+        if !self.done || self.error.is_some() {
+            return None;
+        }
+        if worker_running && matches!(c, 'I' | 'R') {
+            return None;
+        }
+        match c {
+            'I' if !self.ignore_apply_ids.is_empty() => Some(DoneCommand::ApplyIgnores),
+            'R' if !self.resolution_entries.is_empty() => Some(DoneCommand::ApplyResolutions),
+            'i' if self.ignore_yaml.is_some() => Some(DoneCommand::CopyIgnores),
+            'r' if !self.suggested_resolutions.is_empty() => Some(DoneCommand::CopyResolutions),
+            _ => None,
+        }
+    }
+
+    pub fn begin_ignore_refresh(&mut self) {
+        self.clear_report_for_continuation();
+    }
+
+    pub fn begin_resolution_auto(&mut self) {
+        self.verb = Verb::Auto;
+        self.phase = Phase::Install;
+        self.clear_report_for_continuation();
+    }
+
+    fn clear_report_for_continuation(&mut self) {
+        self.done = false;
+        self.report_ready = false;
+        self.worker_finished = false;
+        self.kpis = None;
+        self.ignore_overview.clear();
+        self.deprecations.clear();
+        self.fixes_section.clear();
+        self.suggested_resolutions.clear();
+        self.unresolved.clear();
+        self.suggested_ignores.clear();
+        self.ignore_yaml = None;
+        self.resolution_entries.clear();
+        self.ignore_apply_ids.clear();
+        self.error = None;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoneCommand {
+    ApplyIgnores,
+    ApplyResolutions,
+    CopyIgnores,
+    CopyResolutions,
 }
 
 fn push_section_strings(out: &mut Vec<String>, title: &str, lines: &[String]) {
@@ -478,6 +547,10 @@ mod tests {
         assert!(!with.contains("quit"));
         assert!(with.contains("[r] resolutions"));
         assert!(with.contains("[i] ignores"));
+        assert!(with.contains("[R] resolutions"));
+        assert!(with.contains("[I] ignores"));
+        assert!(with.contains("Copy:"));
+        assert!(with.contains("Apply:"));
         assert!(with.contains(" · "));
 
         state.maximized = true;
@@ -507,5 +580,103 @@ mod tests {
             });
         }
         assert_eq!(state.activity.len(), 500);
+    }
+
+    fn populate_suggestions(state: &mut UiState) {
+        let line = crate::ui::format_resolution_line("pkg@^1", "1.2.3");
+        state.apply(UiEvent::Section {
+            title: "suggested resolutions".into(),
+            lines: vec![line],
+        });
+        state.apply(UiEvent::SuggestedResolutions {
+            entries: vec![("pkg@^1".into(), "1.2.3".into())],
+        });
+        state.apply(UiEvent::IgnoreYaml {
+            yaml: "npmAuditIgnoreAdvisories:\n  - \"9\"\n".into(),
+        });
+        state.apply(UiEvent::SuggestedIgnoreIds {
+            ids: vec!["9".into()],
+        });
+        state.apply(UiEvent::ReportComplete);
+    }
+
+    #[test]
+    fn snapshots_match_formatted_suggestion_lines() {
+        let mut state = UiState::new(Verb::Check);
+        populate_suggestions(&mut state);
+        assert_eq!(
+            crate::ui::format_resolution_line(
+                &state.resolution_entries[0].0,
+                &state.resolution_entries[0].1
+            ),
+            state.suggested_resolutions[0]
+        );
+        assert_eq!(state.ignore_apply_ids, vec!["9".to_string()]);
+        let empty = UiState::new(Verb::Check);
+        assert!(empty.resolution_entries.is_empty());
+        assert!(empty.ignore_apply_ids.is_empty());
+    }
+
+    #[test]
+    fn empty_suggestions_have_no_copy_or_apply_hints() {
+        let mut state = UiState::new(Verb::Check);
+        state.focus = PaneId::Next;
+        let hints = state.keyboard_hints(None);
+        assert!(!hints.contains("Copy:"));
+        assert!(!hints.contains("Apply:"));
+        assert!(!hints.contains("[R]"));
+        assert!(!hints.contains("[I]"));
+    }
+
+    #[test]
+    fn done_commands_copy_vs_apply_and_empty_noop() {
+        let mut state = UiState::new(Verb::Check);
+        populate_suggestions(&mut state);
+        assert_eq!(
+            state.done_command('r', false),
+            Some(DoneCommand::CopyResolutions)
+        );
+        assert_eq!(
+            state.done_command('i', false),
+            Some(DoneCommand::CopyIgnores)
+        );
+        assert_eq!(
+            state.done_command('R', false),
+            Some(DoneCommand::ApplyResolutions)
+        );
+        assert_eq!(
+            state.done_command('I', false),
+            Some(DoneCommand::ApplyIgnores)
+        );
+        assert_eq!(state.done_command('R', true), None);
+        assert_eq!(state.done_command('I', true), None);
+        let empty = UiState::new(Verb::Check);
+        let mut empty = empty;
+        empty.done = true;
+        assert_eq!(empty.done_command('R', false), None);
+        assert_eq!(empty.done_command('I', false), None);
+    }
+
+    #[test]
+    fn check_r_switches_to_live_auto_chrome() {
+        let mut state = UiState::new(Verb::Check);
+        populate_suggestions(&mut state);
+        assert!(!state.is_live_auto());
+        state.begin_resolution_auto();
+        assert!(state.is_live_auto());
+        assert!(!state.done);
+        assert!(!state.report_ready);
+        assert_eq!(state.phase, Phase::Install);
+        assert!(state.resolution_entries.is_empty());
+    }
+
+    #[test]
+    fn check_i_keeps_compact_chrome() {
+        let mut state = UiState::new(Verb::Check);
+        populate_suggestions(&mut state);
+        state.begin_ignore_refresh();
+        assert!(!state.is_live_auto());
+        assert!(!state.done);
+        assert_eq!(state.verb, Verb::Check);
     }
 }
