@@ -10,6 +10,7 @@ use std::{
 
 use crate::{
     Package,
+    audit::Severity,
     package::Dependency,
     parse,
     ui::{SharedReporter, UiEvent, stdout_reporter},
@@ -79,7 +80,7 @@ impl Locks {
         Ok(())
     }
 
-    fn reset_one(&mut self, package: &str) -> bool {
+    fn reset_one(&mut self, package: &str, severity: Option<Severity>) -> bool {
         let len = self.root.packages.len();
         self.root.packages.retain(|k, _| {
             if let Some(tail) = k.strip_prefix(package)
@@ -96,7 +97,10 @@ impl Locks {
         }
 
         self.reporter.emit(UiEvent::Fix {
-            message: format!("reset {package}"),
+            message: match severity {
+                Some(severity) => format!("reset {package}  {severity}"),
+                None => format!("reset {package}"),
+            },
         });
         true
     }
@@ -134,9 +138,18 @@ impl Locks {
     }
 
     pub fn reset(&mut self, packages: &[impl AsRef<str>]) -> Result<bool, Error> {
+        self.reset_with_severities(packages, &HashMap::new())
+    }
+
+    pub fn reset_with_severities(
+        &mut self,
+        packages: &[impl AsRef<str>],
+        severities: &HashMap<String, Severity>,
+    ) -> Result<bool, Error> {
         let mut dirty = false;
         for package in packages {
-            dirty = self.reset_one(package.as_ref()) || dirty;
+            let name = package.as_ref();
+            dirty = self.reset_one(name, severities.get(name).copied()) || dirty;
         }
 
         if !dirty {
@@ -345,5 +358,43 @@ mod tests {
         assert_eq!(locks.dependents("left-pad").len(), 2);
         assert_eq!(locks.all().len(), 2);
         assert_eq!(locks.for_package("parent").len(), 1);
+    }
+
+    #[test]
+    fn reset_without_severity_keeps_plain_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_sample(dir.path());
+        let reporter = std::sync::Arc::new(crate::ui::CollectingReporter::new());
+        let mut locks = Locks::read_with_reporter(path, reporter.clone()).unwrap();
+        assert!(locks.reset(&["left-pad"]).unwrap());
+        let messages: Vec<_> = reporter
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                UiEvent::Fix { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, vec!["reset left-pad".to_string()]);
+    }
+
+    #[test]
+    fn reset_with_severity_includes_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_sample(dir.path());
+        let reporter = std::sync::Arc::new(crate::ui::CollectingReporter::new());
+        let mut locks = Locks::read_with_reporter(path, reporter.clone()).unwrap();
+        let mut sevs = HashMap::new();
+        sevs.insert("left-pad".to_owned(), Severity::High);
+        assert!(locks.reset_with_severities(&["left-pad"], &sevs).unwrap());
+        let messages: Vec<_> = reporter
+            .events()
+            .into_iter()
+            .filter_map(|e| match e {
+                UiEvent::Fix { message } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, vec!["reset left-pad  high".to_string()]);
     }
 }

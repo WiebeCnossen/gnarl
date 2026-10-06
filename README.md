@@ -9,7 +9,7 @@ This is a complete and incompatible rewrite of the Go version.
 # Usage
 
 ```
-gnarl [check | reset <packages>] [-s <severity>]
+gnarl [check | reset <packages> | auto] [-s <severity>] [--raw] [--auto-ignore]
 ```
 
 ## Auto
@@ -24,11 +24,31 @@ This is the default operation. It will do
 6. drop unused resolutions from `package.json`
 7. drop orphan `npmAuditIgnoreAdvisories` entries and entries superseded by a within-range fix (resetting those packages)
 8. if resolutions were removed or ignore hygiene reset packages, run `install` + `dedupe` once more
-9. run `check` (including ignore overview and suggested ignores)
+9. with `--auto-ignore`, merge suggested ignore IDs into `.yarnrc.yml` (does not by itself trigger install)
+10. run `check` (including ignore overview and suggested ignores)
 
 ```
 gnarl [-s <severity>]
+gnarl auto --raw --auto-ignore
 ```
+
+`--auto-ignore` is valid only on `auto` (including default `auto`). Advisory-driven reset and applied-ignore messages include severity. Within-range resets and deprecations do not affect the policy exit. A bot chooses pull/merge request vs direct push from that code; gnarl has no hosting client.
+
+Without `--auto-ignore`, suggested ignores stay paste-only. `--raw` only forces tagged stdout (no TUI), independent of `--auto-ignore`.
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success: no new ignores written, or the run did not use `--auto-ignore` (`check`, `reset`, `help`, `info`, and plain `auto`) |
+| 1 | Tool error (unknown verb, invalid flag combination, yarn/network/parse failure, and so on) |
+| 10 | `auto --auto-ignore`: highest severity among **newly written** ignore IDs is `info` |
+| 11 | `auto --auto-ignore`: highest newly written ignore is `low` |
+| 12 | `auto --auto-ignore`: highest newly written ignore is `moderate` |
+| 13 | `auto --auto-ignore`: highest newly written ignore is `high` |
+| 14 | `auto --auto-ignore`: highest newly written ignore is `critical` |
+
+Codes 10–14 are used only after a successful `auto --auto-ignore` that wrote at least one new ID. A tool error always exits `1`, even if ignores were already written.
 
 ## Check
 

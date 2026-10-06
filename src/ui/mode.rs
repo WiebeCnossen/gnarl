@@ -37,4 +37,14 @@ mod tests {
         assert_eq!(select_ui_mode(true, false, Verb::Help), UiMode::Stdout);
         assert_eq!(select_ui_mode(true, false, Verb::Info), UiMode::Stdout);
     }
+
+    #[test]
+    fn auto_ignore_is_not_a_ui_mode_input() {
+        // `--auto-ignore` is not passed to select_ui_mode; TTY auto stays interactive.
+        assert_eq!(
+            select_ui_mode(true, false, Verb::Auto),
+            UiMode::Interactive
+        );
+        assert_eq!(select_ui_mode(true, true, Verb::Auto), UiMode::Stdout);
+    }
 }

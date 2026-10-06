@@ -75,6 +75,23 @@ impl YarnRc {
         true
     }
 
+    /// Append `new_ids` that are not already present (string-normalized). Returns newly added IDs.
+    pub fn merge_npm_audit_ignore_advisories(&mut self, new_ids: &[String]) -> Vec<String> {
+        let mut ids = self.npm_audit_ignore_advisories();
+        let mut added = Vec::new();
+        for id in new_ids {
+            if ids.iter().any(|existing| existing == id) {
+                continue;
+            }
+            ids.push(id.clone());
+            added.push(id.clone());
+        }
+        if !added.is_empty() {
+            self.set_npm_audit_ignore_advisories(&ids);
+        }
+        added
+    }
+
     pub fn save(&self) -> Result<(), Error> {
         let ids = self.npm_audit_ignore_advisories();
 
@@ -561,5 +578,66 @@ compressionLevel: mixed
         assert_eq!(detect_newline("a\nb\n"), "\n");
         assert_eq!(detect_newline("a\r\nb\r\n"), "\r\n");
         assert_eq!(detect_newline("a\nb\r\n"), "\r\n");
+    }
+
+    #[test]
+    fn merge_keeps_existing_and_skips_duplicates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        write_sample(&path);
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        let added = yarnrc.merge_npm_audit_ignore_advisories(&[
+            "1111111".to_owned(),
+            "9999999".to_owned(),
+            "9999999".to_owned(),
+        ]);
+        assert_eq!(added, vec!["9999999".to_owned()]);
+        yarnrc.save().unwrap();
+
+        assert_eq!(
+            YarnRc::read(path).unwrap().npm_audit_ignore_advisories(),
+            vec![
+                "1111111".to_owned(),
+                "2222222".to_owned(),
+                "GHSA-xxxx-yyyy-zzzz".to_owned(),
+                "9999999".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_empty_does_not_change_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        write_sample(&path);
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        assert!(yarnrc.merge_npm_audit_ignore_advisories(&[]).is_empty());
+        assert_eq!(
+            yarnrc.npm_audit_ignore_advisories(),
+            vec![
+                "1111111".to_owned(),
+                "2222222".to_owned(),
+                "GHSA-xxxx-yyyy-zzzz".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_save_preserves_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".yarnrc.yml");
+        let original = "# keep\r\nnodeLinker: node-modules\r\nnpmAuditIgnoreAdvisories:\r\n  - \"1111111\"\r\n";
+        fs::write(&path, original).unwrap();
+
+        let mut yarnrc = YarnRc::read(path.clone()).unwrap();
+        yarnrc.merge_npm_audit_ignore_advisories(&["2222222".to_owned()]);
+        yarnrc.save().unwrap();
+
+        let after_text = fs::read_to_string(&path).unwrap();
+        assert!(is_crlf_file(&after_text), "save introduced LF-only newlines: {after_text:?}");
+        assert!(after_text.contains(
+            "npmAuditIgnoreAdvisories:\r\n  - \"1111111\"\r\n  - \"2222222\"\r\n"
+        ));
     }
 }

@@ -1,18 +1,29 @@
 use std::env;
 use std::io::IsTerminal;
+use std::process::ExitCode;
 
-use gnarl::cmd::{Command, Verb, Verb::*};
+use gnarl::cmd::{Command, Verb, Verb::*, help_lines};
 use gnarl::gnarl::Gnarl;
 use gnarl::ui::{UiMode, select_ui_mode, stdout_reporter, tui};
-use gnarl::{Error, out_indent, out_info};
+use gnarl::{Error, RunStatus, out_indent, out_info};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn main() -> Result<(), Error> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(status) => ExitCode::from(status.policy_exit()),
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run() -> Result<RunStatus, Error> {
     let command = Command::try_from(env::args())?;
 
     match command.verb() {
-        Auto => run_verb(command.verb(), command.options())?,
+        Auto => run_verb(command.verb(), command.options()),
 
         Reset => {
             // Standalone reset (and any chained auto) starts on stdout for the reset lines.
@@ -21,38 +32,43 @@ fn main() -> Result<(), Error> {
             let should_auto = gnarl.reset(command.parameters())?;
             if should_auto {
                 // Version already printed above for the reset stdout path.
-                run_verb_inner(Auto, command.options(), false)?;
+                run_verb_inner(Auto, command.options(), false)
+            } else {
+                Ok(RunStatus::ok())
             }
         }
 
-        Check => run_verb(command.verb(), command.options())?,
+        Check => run_verb(command.verb(), command.options()),
 
         Help => {
             out_info!("gnarl {VERSION}");
-            out_info!("the yarn v4 companion tool");
-            out_indent!("usage: gnarl [<auto | reset | check | info | help> <args>]");
-            out_indent!("> gnarl [auto] [--raw] [-x] [-s <severity>]");
-            out_indent!("> gnarl reset [--raw] [-x] package-names...");
-            out_indent!("> gnarl check [--raw]");
-            out_indent!("> gnarl info");
-            out_indent!("> gnarl help");
-            out_indent!("--raw  force tagged stdout even on a TTY");
+            for line in help_lines() {
+                if line.starts_with("the yarn") {
+                    out_info!("{line}");
+                } else {
+                    out_indent!("{line}");
+                }
+            }
+            Ok(RunStatus::ok())
         }
 
         Info => {
             out_info!("gnarl {VERSION}");
             out_info!("");
+            Ok(RunStatus::ok())
         }
-    };
-
-    Ok(())
+    }
 }
 
-fn run_verb(verb: Verb, options: gnarl::cmd::Options) -> Result<(), Error> {
+fn run_verb(verb: Verb, options: gnarl::cmd::Options) -> Result<RunStatus, Error> {
     run_verb_inner(verb, options, true)
 }
 
-fn run_verb_inner(verb: Verb, options: gnarl::cmd::Options, print_version: bool) -> Result<(), Error> {
+fn run_verb_inner(
+    verb: Verb,
+    options: gnarl::cmd::Options,
+    print_version: bool,
+) -> Result<RunStatus, Error> {
     let mode = select_ui_mode(std::io::stdout().is_terminal(), options.raw(), verb);
     match mode {
         UiMode::Interactive => tui::run_interactive(verb, options, VERSION),
@@ -64,7 +80,7 @@ fn run_verb_inner(verb: Verb, options: gnarl::cmd::Options, print_version: bool)
             match verb {
                 Auto => gnarl.auto(),
                 Check => gnarl.check(),
-                _ => Ok(()),
+                _ => Ok(RunStatus::ok()),
             }
         }
     }

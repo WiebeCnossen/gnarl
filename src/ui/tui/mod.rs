@@ -21,6 +21,7 @@ use ratatui::backend::CrosstermBackend;
 
 use super::{Reporter, SharedReporter, UiEvent};
 use crate::Error;
+use crate::RunStatus;
 use crate::cmd::Verb;
 use crate::gnarl::Gnarl;
 
@@ -62,18 +63,18 @@ pub fn run_interactive(
     verb: Verb,
     options: crate::cmd::Options,
     version: &str,
-) -> Result<(), Error> {
+) -> Result<RunStatus, Error> {
     let (tx, rx) = mpsc::channel::<UiEvent>();
     let reporter: SharedReporter = Arc::new(ChannelReporter { tx });
 
-    let worker = thread::spawn(move || -> Result<(), Error> {
+    let worker = thread::spawn(move || -> Result<RunStatus, Error> {
         let run_reporter = reporter.clone();
         let result = (|| {
             let mut gnarl = Gnarl::with_reporter(options, reporter.clone())?;
             match verb {
                 Verb::Auto => gnarl.auto(),
                 Verb::Check => gnarl.check(),
-                _ => Ok(()),
+                _ => Ok(RunStatus::ok()),
             }
         })();
         if let Err(ref err) = result {
@@ -89,8 +90,15 @@ pub fn run_interactive(
         .join()
         .unwrap_or_else(|_| Err("worker thread panicked".into()));
 
-    match (ui_result, worker_result) {
-        (Ok(()), Ok(())) => Ok(()),
+    finish_interactive(ui_result, worker_result)
+}
+
+pub(crate) fn finish_interactive(
+    ui: Result<(), Error>,
+    worker: Result<RunStatus, Error>,
+) -> Result<RunStatus, Error> {
+    match (ui, worker) {
+        (Ok(()), Ok(status)) => Ok(status),
         (Err(e), _) | (_, Err(e)) => Err(e),
     }
 }
@@ -256,5 +264,23 @@ mod tests {
         }
         let guard = TerminalGuard::enter();
         drop(guard);
+    }
+
+    #[test]
+    fn finish_interactive_keeps_worker_policy_exit() {
+        let status = crate::RunStatus::from_max_ignore_severity(Some(
+            crate::audit::Severity::Critical,
+        ));
+        let out = finish_interactive(Ok(()), Ok(status)).unwrap();
+        assert_eq!(out.policy_exit(), 14);
+    }
+
+    #[test]
+    fn finish_interactive_prefers_error() {
+        let status = crate::RunStatus::from_max_ignore_severity(Some(
+            crate::audit::Severity::Critical,
+        ));
+        let err = finish_interactive(Err("ui failed".into()), Ok(status)).unwrap_err();
+        assert_eq!(err.to_string(), "ui failed");
     }
 }

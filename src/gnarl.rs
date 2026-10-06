@@ -3,13 +3,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use nodejs_semver::{OutsideDirection, Range, Version};
 
 use crate::{
-    Error,
-    audit::Advisory,
+    Error, RunStatus,
+    audit::{Advisory, Severity},
     check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
     package::Dependency,
     parse,
+    status,
     ui::{
         ActivityKind, SharedReporter, UiEvent, format_ignore_yaml, format_resolution_line,
         format_section_lines, stdout_reporter,
@@ -24,6 +25,15 @@ pub struct Gnarl {
     /// Printed `{package} blocked by {other}@{version}` keys for this process run.
     blocked_by: HashSet<String>,
     reporter: SharedReporter,
+}
+
+struct Classification {
+    deprecations: Vec<String>,
+    fixes: BTreeMap<String, SuggestedFix>,
+    resolutions: BTreeMap<String, SuggestedFix>,
+    errors: Vec<String>,
+    ignore_suggestions: BTreeMap<String, IgnoreSuggestion>,
+    lock_len: usize,
 }
 
 struct SuggestedFix {
@@ -49,26 +59,38 @@ impl Gnarl {
         Yarn::with_reporter(self.options.severity(), self.reporter.clone())
     }
 
-    pub fn check(&mut self) -> Result<(), Error> {
+    pub fn check(&mut self) -> Result<RunStatus, Error> {
         self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Report));
         let mut yarn = self.yarn()?;
-
         let advisories = yarn.audit()?;
+        let class = self.classify(&mut yarn, advisories, true)?;
+        self.emit_report(&yarn, class)?;
+        Ok(RunStatus::ok())
+    }
+
+    fn classify(
+        &mut self,
+        yarn: &mut Yarn,
+        advisories: Vec<Advisory>,
+        emit_hits: bool,
+    ) -> Result<Classification, Error> {
         let mut deprecations = vec![];
         let mut fixes = BTreeMap::new();
         let mut resolutions = BTreeMap::new();
         let mut errors = vec![];
         let mut ignore_suggestions = BTreeMap::new();
-        for advisory in &advisories {
-            self.reporter.emit(UiEvent::Activity {
-                kind: ActivityKind::Hit,
-                message: format!(
-                    "{}: {}@{}",
-                    advisory.label(),
-                    advisory.module_name(),
-                    advisory.vulnerable_versions()
-                ),
-            });
+        if emit_hits {
+            for advisory in &advisories {
+                self.reporter.emit(UiEvent::Activity {
+                    kind: ActivityKind::Hit,
+                    message: format!(
+                        "{}: {}@{}",
+                        advisory.label(),
+                        advisory.module_name(),
+                        advisory.vulnerable_versions()
+                    ),
+                });
+            }
         }
 
         let lock_len = {
@@ -142,23 +164,35 @@ impl Gnarl {
 
         fixes.retain(|key, _| !resolutions.contains_key(key));
 
+        Ok(Classification {
+            deprecations,
+            fixes,
+            resolutions,
+            errors,
+            ignore_suggestions,
+            lock_len,
+        })
+    }
+
+    fn emit_report(&mut self, yarn: &Yarn, class: Classification) -> Result<(), Error> {
         Kpis::new(
             yarn.len_dependencies(),
             yarn.len_dev_dependencies(),
-            lock_len,
+            class.lock_len,
             yarn.len_resolutions(),
-            deprecations.len(),
-            fixes.len() + resolutions.len() + errors.len(),
+            class.deprecations.len(),
+            class.fixes.len() + class.resolutions.len() + class.errors.len(),
         )
         .emit(&*self.reporter);
 
-        self.print_ignore_overview(&yarn)?;
+        self.print_ignore_overview(yarn)?;
 
-        emit_section(&*self.reporter, "deprecations", deprecations);
+        emit_section(&*self.reporter, "deprecations", class.deprecations);
         emit_section(
             &*self.reporter,
             "fixes",
-            fixes
+            class
+                .fixes
                 .iter()
                 .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
@@ -166,16 +200,16 @@ impl Gnarl {
         emit_section(
             &*self.reporter,
             "suggested resolutions",
-            resolutions
+            class
+                .resolutions
                 .iter()
                 .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
         );
-        emit_section(&*self.reporter, "unresolved issues", errors);
-        self.print_suggested_ignores(&yarn, ignore_suggestions)?;
+        emit_section(&*self.reporter, "unresolved issues", class.errors);
+        self.print_suggested_ignores(yarn, class.ignore_suggestions)?;
         self.reporter.emit(UiEvent::ReportComplete);
         self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Done));
-
         Ok(())
     }
 
@@ -186,7 +220,7 @@ impl Gnarl {
         Ok(dirty && !self.options.no_install())
     }
 
-    pub fn auto(&mut self) -> Result<(), Error> {
+    pub fn auto(&mut self) -> Result<RunStatus, Error> {
         let _: () = loop {
             let mut yarn = self.yarn()?;
             self.reporter
@@ -197,6 +231,7 @@ impl Gnarl {
 
             let mut dirty = false;
             let mut resets = vec![];
+            let mut reset_severities = HashMap::new();
             self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Audit));
             let mut advisories = yarn.audit()?;
             self.reporter.emit(UiEvent::Activity {
@@ -211,6 +246,11 @@ impl Gnarl {
                     && self.fix(&mut yarn, &advisory, &mut advisories)?
                 {
                     dirty = true;
+                    note_reset_severity(
+                        &mut reset_severities,
+                        advisory.module_name(),
+                        advisory.severity(),
+                    );
                     resets.push(advisory.module_name().to_owned());
                 }
             }
@@ -220,7 +260,8 @@ impl Gnarl {
             }
 
             if !resets.is_empty() {
-                yarn.locks()?.reset(&resets)?;
+                yarn.locks()?
+                    .reset_with_severities(&resets, &reset_severities)?;
                 self.reset.extend(resets);
             }
         };
@@ -236,7 +277,40 @@ impl Gnarl {
             yarn.dedupe()?;
         }
 
-        self.check()
+        let policy = if self.options.auto_ignore() {
+            self.persist_suggested_ignores()?
+        } else {
+            RunStatus::ok()
+        };
+        self.check()?;
+        Ok(policy)
+    }
+
+    fn persist_suggested_ignores(&mut self) -> Result<RunStatus, Error> {
+        let mut yarn = self.yarn()?;
+        let advisories = yarn.audit()?;
+        let class = self.classify(&mut yarn, advisories, false)?;
+        let mut yarnrc = yarn.yarnrc()?;
+        let existing: HashSet<String> = yarnrc.npm_audit_ignore_advisories().into_iter().collect();
+        let to_write = new_ignore_suggestions(&class.ignore_suggestions, &existing);
+        if to_write.is_empty() {
+            return Ok(RunStatus::ok());
+        }
+
+        let mut max_sev: Option<Severity> = None;
+        let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
+        for suggestion in &to_write {
+            max_sev = Some(match max_sev {
+                None => suggestion.severity,
+                Some(current) => current.max(suggestion.severity),
+            });
+            self.reporter.emit(UiEvent::Fix {
+                message: ignore_fix_message(suggestion),
+            });
+        }
+        yarnrc.merge_npm_audit_ignore_advisories(&ids);
+        yarnrc.save()?;
+        Ok(status::auto_ignore_status(true, max_sev))
     }
 
     fn print_ignore_overview(&mut self, yarn: &Yarn) -> Result<(), Error> {
@@ -281,18 +355,13 @@ impl Gnarl {
             .into_iter()
             .collect();
 
-        let ids: Vec<String> = suggestions
-            .keys()
-            .filter(|id| !existing.contains(id.as_str()))
-            .cloned()
-            .collect();
-        if ids.is_empty() {
+        let to_write = new_ignore_suggestions(&suggestions, &existing);
+        if to_write.is_empty() {
             return Ok(());
         }
 
-        let lines: Vec<String> = ids
+        let lines: Vec<String> = to_write
             .iter()
-            .filter_map(|id| suggestions.get(id))
             .map(|s| {
                 format!(
                     "{}  {}  {}@{}",
@@ -300,6 +369,7 @@ impl Gnarl {
                 )
             })
             .collect();
+        let ids: Vec<String> = to_write.iter().map(|s| s.id.clone()).collect();
 
         emit_section(&*self.reporter, "suggested ignores", lines);
         self.reporter.emit(UiEvent::IgnoreYaml {
@@ -323,6 +393,7 @@ impl Gnarl {
 
         let mut yarnrc_dirty = false;
         let mut resets = Vec::new();
+        let mut reset_severities = HashMap::new();
 
         for id in &ignores {
             match by_id.get(id) {
@@ -338,11 +409,16 @@ impl Gnarl {
                 Some(advisory) => {
                     if self.within_range_resettable(yarn, advisory)? {
                         self.reporter.emit(UiEvent::Fix {
-                            message: format!("drop ignore {id} (within-range fix)"),
+                            message: drop_within_range_ignore_message(id, advisory.severity()),
                         });
                         if yarnrc.remove_npm_audit_ignore_advisory(id) {
                             yarnrc_dirty = true;
                         }
+                        note_reset_severity(
+                            &mut reset_severities,
+                            advisory.module_name(),
+                            advisory.severity(),
+                        );
                         resets.push(advisory.module_name().to_owned());
                     }
                 }
@@ -354,7 +430,8 @@ impl Gnarl {
         }
 
         if !resets.is_empty() {
-            yarn.locks()?.reset(&resets)?;
+            yarn.locks()?
+                .reset_with_severities(&resets, &reset_severities)?;
             self.reset.extend(resets.iter().cloned());
         }
 
@@ -570,9 +647,40 @@ fn emit_section(reporter: &dyn crate::ui::Reporter, title: &str, lines: Vec<Stri
 
 struct IgnoreSuggestion {
     id: String,
-    severity: String,
+    severity: Severity,
     module_name: String,
     vulnerable_versions: String,
+}
+
+fn ignore_fix_message(suggestion: &IgnoreSuggestion) -> String {
+    format!(
+        "ignore {}  {}  {}@{}",
+        suggestion.id, suggestion.severity, suggestion.module_name, suggestion.vulnerable_versions
+    )
+}
+
+fn drop_within_range_ignore_message(id: &str, severity: Severity) -> String {
+    format!("drop ignore {id} (within-range fix)  {severity}")
+}
+
+fn new_ignore_suggestions<'a>(
+    suggestions: &'a BTreeMap<String, IgnoreSuggestion>,
+    existing: &HashSet<String>,
+) -> Vec<&'a IgnoreSuggestion> {
+    suggestions
+        .values()
+        .filter(|s| !existing.contains(&s.id))
+        .collect()
+}
+
+fn note_reset_severity(map: &mut HashMap<String, Severity>, package: &str, severity: Severity) {
+    map.entry(package.to_owned())
+        .and_modify(|current| {
+            if severity > *current {
+                *current = severity;
+            }
+        })
+        .or_insert(severity);
 }
 
 fn record_ignore_suggestion(
@@ -581,7 +689,7 @@ fn record_ignore_suggestion(
 ) {
     map.entry(advisory.id().to_owned()).or_insert_with(|| IgnoreSuggestion {
         id: advisory.id().to_owned(),
-        severity: advisory.severity().to_string(),
+        severity: advisory.severity(),
         module_name: advisory.module_name().to_owned(),
         vulnerable_versions: advisory.vulnerable_versions().to_string(),
     });
@@ -602,4 +710,80 @@ fn add_fix(
         .or_insert(SuggestedFix {
             version: resolution.to_owned(),
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::status::auto_ignore_status;
+
+    fn suggestion(id: &str, severity: Severity) -> IgnoreSuggestion {
+        IgnoreSuggestion {
+            id: id.to_owned(),
+            severity,
+            module_name: "left-pad".to_owned(),
+            vulnerable_versions: "<1.3.0".to_owned(),
+        }
+    }
+
+    #[test]
+    fn no_candidates_means_policy_zero_and_nothing_to_write() {
+        let suggestions = BTreeMap::new();
+        let existing = HashSet::new();
+        assert!(new_ignore_suggestions(&suggestions, &existing).is_empty());
+        assert_eq!(auto_ignore_status(true, None).policy_exit(), 0);
+    }
+
+    #[test]
+    fn high_and_low_new_ignores_map_to_exit_13() {
+        let mut suggestions = BTreeMap::new();
+        suggestions.insert("1".into(), suggestion("1", Severity::High));
+        suggestions.insert("2".into(), suggestion("2", Severity::Low));
+        let existing = HashSet::new();
+        let to_write = new_ignore_suggestions(&suggestions, &existing);
+        let max = to_write.iter().map(|s| s.severity).max();
+        assert_eq!(
+            auto_ignore_status(true, max).policy_exit(),
+            13
+        );
+        assert_eq!(
+            auto_ignore_status(false, max).policy_exit(),
+            0
+        );
+    }
+
+    #[test]
+    fn written_ids_are_omitted_from_later_suggestions() {
+        let mut suggestions = BTreeMap::new();
+        suggestions.insert("1111111".into(), suggestion("1111111", Severity::High));
+        let mut existing = HashSet::new();
+        existing.insert("1111111".into());
+        assert!(new_ignore_suggestions(&suggestions, &existing).is_empty());
+    }
+
+    #[test]
+    fn ignore_fix_message_includes_id_and_severity() {
+        let s = suggestion("1111111", Severity::High);
+        let msg = ignore_fix_message(&s);
+        assert!(msg.contains("1111111"));
+        assert!(msg.contains("high"));
+    }
+
+    #[test]
+    fn drop_within_range_message_includes_severity_and_does_not_set_policy() {
+        let msg = drop_within_range_ignore_message("1111111", Severity::Critical);
+        assert!(msg.contains("critical"));
+        assert_eq!(
+            auto_ignore_status(true, None).policy_exit(),
+            0
+        );
+    }
+
+    #[test]
+    fn reset_severity_map_uses_maximum() {
+        let mut map = HashMap::new();
+        note_reset_severity(&mut map, "lodash", Severity::Moderate);
+        note_reset_severity(&mut map, "lodash", Severity::Critical);
+        assert_eq!(map.get("lodash"), Some(&Severity::Critical));
+    }
 }

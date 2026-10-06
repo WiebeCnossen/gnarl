@@ -365,6 +365,19 @@ mod tests {
     }
 
     #[test]
+    fn live_fixes_record_severity_in_message() {
+        let mut state = UiState::new(Verb::Auto);
+        state.apply(UiEvent::Fix {
+            message: "ignore 1111111  high  left-pad@<1.3.0".into(),
+        });
+        state.apply(UiEvent::Fix {
+            message: "reset lodash  high".into(),
+        });
+        assert!(state.fixes.iter().any(|m| m.contains("high")));
+        assert_eq!(state.fixes.len(), 2);
+    }
+
+    #[test]
     fn report_events_fill_done_regions() {
         let mut state = UiState::new(Verb::Check);
         state.apply(UiEvent::Kpis {
