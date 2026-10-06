@@ -1,0 +1,99 @@
+# Copy this YAML into an Azure DevOps Yarn repo and copy the helper to scripts/Invoke-GnarlNightly.ps1
+# (source: examples/nightly/Invoke-GnarlNightly.ps1 in the gnarl repo). Register a separate pipeline
+# (Pipelines > New > Existing Azure Pipelines YAML file) that points at this file. Keep your main CI
+# as azure-pipelines.yml (or whatever it is named); this job is schedule-only.
+#
+# Project Settings > Repositories > this repo > Security: grant the job identity
+#   "{Project} Build Service ({org})"  (the Build\... GUID in TF401027)
+#   Contribute = Allow
+#   Create branch = Allow
+#   Contribute to pull requests = Allow
+# Direct push to the default branch still fails under required reviewers unless that
+# identity may Bypass policies when pushing, or you lower prFrom so those runs become PRs.
+# This pipeline uses trigger: none so commits do not start it. Other CI on main
+# should still run after a bot push (no [skip ci] in the commit message).
+# If it still runs on push, the pipeline's Triggers UI is overriding YAML: uncheck
+# "Override the YAML continuous integration trigger from here".
+
+trigger: none
+pr: none
+
+# Schedule include must be a literal branch name (template expressions are not allowed here).
+# Keep it in sync with the defaultBranch parameter used for push/PR target.
+
+schedules:
+  - cron: "0 2 * * *"
+    displayName: Nightly gnarl
+    branches:
+      include:
+        - main
+    always: true
+
+parameters:
+  - name: yarnWorkingDirectory
+    displayName: Directory that already contains yarn.lock
+    type: string
+    default: "."
+  - name: gnarlVersion
+    displayName: Pinned gnarl release (no latest)
+    type: string
+    default: "3.1.0"
+  - name: prFrom
+    displayName: Minimum new-ignore severity that opens a PR
+    type: string
+    default: high
+    values:
+      - none
+      - info
+      - low
+      - moderate
+      - high
+      - critical
+  - name: defaultBranch
+    type: string
+    default: main
+  - name: helperScript
+    displayName: Path to Invoke-GnarlNightly.ps1 in this repo
+    type: string
+    default: "$(Build.SourcesDirectory)/scripts/Invoke-GnarlNightly.ps1"
+
+variables:
+  gnarlDir: $(Agent.TempDirectory)/gnarl
+
+pool:
+  vmImage: windows-latest
+
+steps:
+  - checkout: self
+    persistCredentials: true
+    fetchDepth: 0
+
+  - task: PowerShell@2
+    displayName: Download gnarl
+    inputs:
+      filePath: ${{ parameters.helperScript }}
+      arguments: >-
+        -Mode EnsureBinary
+        -GnarlVersion "${{ parameters.gnarlVersion }}"
+        -CacheDirectory "$(gnarlDir)"
+      pwsh: true
+
+  - script: |
+      npm i -g @aikidosec/safe-chain
+      safe-chain setup-ci
+    displayName: "Install safe chain"
+
+  - task: PowerShell@2
+    displayName: gnarl auto and publish
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+    inputs:
+      filePath: ${{ parameters.helperScript }}
+      arguments: >-
+        -Mode Auto
+        -GnarlExe "$(gnarlDir)/gnarl.exe"
+        -YarnWorkingDirectory "${{ parameters.yarnWorkingDirectory }}"
+        -PrFrom "${{ parameters.prFrom }}"
+        -DefaultBranch "${{ parameters.defaultBranch }}"
+        -RepoRoot "$(Build.SourcesDirectory)"
+      pwsh: true

@@ -38,6 +38,13 @@ Without `--auto-ignore`, suggested ignores stay paste-only on tagged stdout. On 
 
 `-x` / `--install-on-change` skips the opening `install`+`dedupe` of `auto`. Install+dedupe still run after this process mutates `package.json` (unused resolutions) or `yarn.lock` (within-range reset, ignore-hygiene package reset, or a chained `reset`). Yarnrc-only writes (including `--auto-ignore`) do not trigger a refresh. Best practice for bots, after the job’s own `yarn install`, is `gnarl auto --raw --auto-ignore --install-on-change`. Interactive use after local dependency edits should omit the flag so `auto` still opens with install+dedupe.
 
+The shared nightly helper lives in this repo at [`examples/nightly/Invoke-GnarlNightly.ps1`](examples/nightly/Invoke-GnarlNightly.ps1) (Windows zip only, `prFrom` for push vs PR/MR). In the Yarn repo, copy it to `scripts/Invoke-GnarlNightly.ps1` together with the host YAML:
+
+- Azure DevOps: [`examples/azure-pipelines/`](examples/azure-pipelines/) — second pipeline pointing at `azure-gnarl-pipeline.yml`
+- GitLab: [`examples/gitlab-ci/gnarl.gitlab-ci.yml`](examples/gitlab-ci/gnarl.gitlab-ci.yml) — `include` it, add a pipeline schedule, skip that schedule on other jobs, set `GNARL_GITLAB_TOKEN`
+
+gnarl itself has no hosting client.
+
 ## Exit codes
 
 | Code | Meaning |

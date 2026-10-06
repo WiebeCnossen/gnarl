@@ -1,0 +1,38 @@
+# Include from your main .gitlab-ci.yml:
+#
+#   include:
+#     - local: examples/gitlab-ci/gnarl.gitlab-ci.yml
+#
+# Create a pipeline schedule (Build > Pipeline schedules). This job runs only then.
+# On existing jobs, skip schedules so nightly does not re-run your full CI:
+#
+#   rules:
+#     - if: $CI_PIPELINE_SOURCE == "schedule"
+#       when: never
+#     - when: on_success
+#
+# Releases currently ship gnarl-x86_64-pc-windows-msvc.zip only: use a Windows runner
+# (tags: windows) with Node.js, corepack/yarn, git, and PowerShell.
+# Copy the helper to scripts/Invoke-GnarlNightly.ps1 (source: examples/nightly/ in the gnarl repo),
+# or set GNARL_HELPER.
+#
+# CI/CD variable GNARL_GITLAB_TOKEN: project access token with api + write_repository.
+# Protected default branch: allow that identity to push, or raise GNARL_PR_FROM so
+# everything becomes an MR.
+
+gnarl:nightly:
+  stage: .post
+  tags:
+    - windows
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    GNARL_VERSION: "3.1.0"
+    GNARL_PR_FROM: "high"
+    GNARL_DEFAULT_BRANCH: "main"
+    YARN_WORKING_DIRECTORY: "."
+    GNARL_HELPER: "scripts/Invoke-GnarlNightly.ps1"
+  script:
+    - pwsh -NoProfile -File $GNARL_HELPER -Mode EnsureBinary -GnarlVersion $GNARL_VERSION -CacheDirectory "$CI_PROJECT_DIR/.gnarl-bin"
+    - pwsh -NoProfile -Command "Set-Location $$env:YARN_WORKING_DIRECTORY; corepack enable; yarn install"
+    - pwsh -NoProfile -File $GNARL_HELPER -Mode Auto -GitHost GitLab -GnarlExe "$CI_PROJECT_DIR/.gnarl-bin/gnarl.exe" -YarnWorkingDirectory $YARN_WORKING_DIRECTORY -PrFrom $GNARL_PR_FROM -DefaultBranch $GNARL_DEFAULT_BRANCH -RepoRoot $CI_PROJECT_DIR
