@@ -6,19 +6,7 @@ Suggest Yarn audit IDs for `npmAuditIgnoreAdvisories` via a dedicated `suggested
 
 ### Requirement: Suggested ignores section
 
-When `check` (including the final `check` after `auto`) has at least one ignore candidate, gnarl MUST present a section titled `suggested ignores`. Candidates MUST be advisory IDs from outside-range resolution suggestions and from unresolved / no-fix issues. Candidates MUST NOT include deprecations, within-range fix suggestions, or IDs already listed in `.yarnrc.yml` `npmAuditIgnoreAdvisories`. Each candidate MUST appear once. Enrichment lines MUST use the same form as the current `npmAuditIgnoreAdvisories` overview (advisory ID, severity, and package with vulnerable range when known). Immediately after those enrichment lines in the presentation, gnarl MUST provide a YAML block that begins with the `npmAuditIgnoreAdvisories` key and lists only the new suggested IDs (not a merge with existing yarnrc entries), in a form suitable for pasting into `.yarnrc.yml`.
-
-Under tagged-stdout mode (non-TTY or `--raw`), that section and YAML MUST appear on stdout as today. Under the interactive TTY UI, the same enrichment content and YAML MUST appear in the Done-screen next-actions region, and the YAML MUST be the payload offered by the ignores clipboard key when present.
-
-#### Scenario: Suggestions include resolutions and unresolved
-
-- **WHEN** `check` has outside-range resolution candidates and unresolved issues with audit IDs not already ignored, under tagged-stdout mode
-- **THEN** stdout MUST include a `suggested ignores` section with enriched lines for those IDs followed by a `npmAuditIgnoreAdvisories:` YAML list of those IDs only
-
-#### Scenario: Suggestions on interactive UI
-
-- **WHEN** `check` (or final `check` after `auto`) has ignore candidates under the interactive TTY UI
-- **THEN** the Done screen MUST present the `suggested ignores` enrichment content and the same paste-ready YAML block content as tagged-stdout mode would emit
+When `check` (including the final `check` after `auto`) has at least one ignore candidate, gnarl MUST present a section titled `suggested ignores`. Candidates MUST be advisory IDs from outside-range resolution suggestions and from unresolved / no-fix issues. Candidates MUST NOT include deprecations, within-range fix suggestions, or IDs already listed in `.yarnrc.yml` `npmAuditIgnoreAdvisories`. Each candidate MUST appear once.
 
 #### Scenario: Already-ignored IDs omitted
 
@@ -34,6 +22,24 @@ Under tagged-stdout mode (non-TTY or `--raw`), that section and YAML MUST appear
 
 - **WHEN** the only advisories are deprecations and/or within-range fix suggestions
 - **THEN** gnarl MUST NOT emit `suggested ignores`
+
+### Requirement: Suggested ignores enrichment and YAML
+
+Enrichment lines in `suggested ignores` MUST use the same form as the current `npmAuditIgnoreAdvisories` overview (advisory ID, severity, and package with vulnerable range when known). Immediately after those lines, gnarl MUST provide a YAML block that begins with the `npmAuditIgnoreAdvisories` key and lists only the new suggested IDs (not a merge with existing yarnrc entries), in a form suitable for pasting into `.yarnrc.yml`.
+
+#### Scenario: Suggestions include resolutions and unresolved
+
+- **WHEN** `check` has outside-range resolution candidates and unresolved issues with audit IDs not already ignored, under tagged-stdout mode
+- **THEN** stdout MUST include a `suggested ignores` section with enriched lines for those IDs followed by a `npmAuditIgnoreAdvisories:` YAML list of those IDs only
+
+### Requirement: Suggested ignores presentation by UI mode
+
+Under tagged-stdout mode (non-TTY or `--raw`), the `suggested ignores` section and YAML MUST appear on stdout. Under the interactive TTY UI, the same enrichment content and YAML MUST appear in the Done-screen next-actions region, and the YAML MUST be the payload offered by the ignores clipboard key when present.
+
+#### Scenario: Suggestions on interactive UI
+
+- **WHEN** `check` (or final `check` after `auto`) has ignore candidates under the interactive TTY UI
+- **THEN** the Done screen MUST present the `suggested ignores` enrichment content and the same paste-ready YAML block content as tagged-stdout mode would emit
 
 ### Requirement: No inline ignore annotations
 
@@ -72,22 +78,24 @@ When `check` presents outside-range resolution suggestions, the section title MU
 
 gnarl MUST present an overview of entries currently listed in `.yarnrc.yml` `npmAuditIgnoreAdvisories`. Enrichment MUST use a severity-unfiltered audit (ignores cleared) so below-`-s` advisories still show package and severity. For each entry that appears in that audit, the overview MUST include the advisory ID, the affected package, and the severity. For orphan entries (ID not present in that audit before drop logic runs), the overview MAY omit package and severity or mark them unknown.
 
-Under tagged-stdout mode the overview MUST appear on stdout. Under the interactive TTY UI it MUST appear in the Done-screen resulting-state region when applicable.
-
 #### Scenario: Enriched overview for known ignores
 
 - **WHEN** `check` or the end of `auto` runs under tagged-stdout mode and `.yarnrc.yml` lists ignore IDs that appear in the severity-unfiltered audit
 - **THEN** stdout MUST include a section listing each such ID with package name and severity
 
-#### Scenario: Enriched overview on interactive UI
-
-- **WHEN** `check` or the end of `auto` runs under the interactive TTY UI and `.yarnrc.yml` lists ignore IDs that appear in the severity-unfiltered audit
-- **THEN** the Done-screen resulting-state region MUST include each such ID with package name and severity
-
 #### Scenario: Empty ignore list
 
 - **WHEN** `npmAuditIgnoreAdvisories` is missing or empty
 - **THEN** gnarl MUST NOT fail and MAY omit the overview section
+
+### Requirement: Ignore overview presentation by UI mode
+
+Under tagged-stdout mode the current-ignore overview MUST appear on stdout. Under the interactive TTY UI it MUST appear in the Done-screen resulting-state region when applicable.
+
+#### Scenario: Enriched overview on interactive UI
+
+- **WHEN** `check` or the end of `auto` runs under the interactive TTY UI and `.yarnrc.yml` lists ignore IDs that appear in the severity-unfiltered audit
+- **THEN** the Done-screen resulting-state region MUST include each such ID with package name and severity
 
 ### Requirement: Auto-drop orphan ignore entries
 
@@ -167,7 +175,7 @@ gnarl MUST accept each `.yarnrc.yml` `npmAuditIgnoreAdvisories` list entry wheth
 
 ### Requirement: Preserve yarnrc line endings on save
 
-When gnarl writes or updates `.yarnrc.yml`, it MUST use the same line-ending convention already present in that file. If the existing file uses CRLF (`\r\n`), the rewritten `npmAuditIgnoreAdvisories` block and any newlines gnarl inserts while splicing MUST use CRLF. If the existing file uses LF (`\n`) only, gnarl MUST continue to write LF. When creating a new `.yarnrc.yml` because none existed, gnarl MAY write LF. gnarl MUST NOT convert the entire file's untouched regions solely to change line endings.
+When gnarl writes or updates `.yarnrc.yml`, it MUST preserve that file's existing line-ending convention (CRLF or LF) for the rewritten `npmAuditIgnoreAdvisories` block and any newlines it inserts. When creating a new `.yarnrc.yml` because none existed, gnarl MAY write LF. gnarl MUST NOT convert untouched regions solely to change line endings.
 
 #### Scenario: Save preserves CRLF yarnrc
 

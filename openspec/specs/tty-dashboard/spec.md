@@ -142,24 +142,33 @@ After the operator applies suggested resolutions from Done, gnarl MUST present t
 - **WHEN** interactive `check` reaches Done and the operator applies suggested resolutions
 - **THEN** gnarl MUST show the live multi-phase `auto` dashboard for the continuation, not the compact check-only chrome
 
-### Requirement: Clipboard copy of suggestion payloads
+### Requirement: Clipboard copy of suggested resolutions
 
-On the interactive Done screen, when suggested resolution lines are present, gnarl MUST offer a keybinding that copies those lines to the system clipboard using the **same text** that the tagged-stdout path would emit for the `suggested resolutions` body lines. When suggested-ignore YAML is present, gnarl MUST offer a keybinding that copies the **same** paste-ready `npmAuditIgnoreAdvisories` YAML block the tagged-stdout path would emit. Keys MUST no-op or be unavailable when the corresponding section is empty.
+On the interactive Done screen, when suggested resolution lines are present, gnarl MUST offer a keybinding that copies those lines to the system clipboard using the **same text** that the tagged-stdout path would emit for the `suggested resolutions` body lines. The key MUST no-op or be unavailable when that section is empty.
 
 #### Scenario: Copy resolutions matches stdout fragments
 
 - **WHEN** the Done screen has suggested resolution lines and the user activates the resolutions copy key
 - **THEN** the clipboard MUST contain exactly those resolution body lines as emitted on the tagged-stdout path (no UI chrome)
 
+#### Scenario: Empty resolutions section does not copy
+
+- **WHEN** there are no suggested resolution lines
+- **THEN** activating the resolutions copy key MUST NOT write an unrelated payload (no-op or key unavailable)
+
+### Requirement: Clipboard copy of suggested-ignore YAML
+
+On the interactive Done screen, when suggested-ignore YAML is present, gnarl MUST offer a keybinding that copies the **same** paste-ready `npmAuditIgnoreAdvisories` YAML block the tagged-stdout path would emit. The key MUST no-op or be unavailable when that section is empty.
+
 #### Scenario: Copy ignores matches pretty ignore YAML
 
 - **WHEN** the Done screen has a suggested-ignores YAML block and the user activates the ignores copy key
 - **THEN** the clipboard MUST contain exactly that YAML block as emitted on the tagged-stdout path
 
-#### Scenario: Empty section does not copy
+#### Scenario: Empty ignores section does not copy
 
-- **WHEN** the corresponding suggestion section is empty
-- **THEN** activating that copy key MUST NOT write an unrelated payload (no-op or key unavailable)
+- **WHEN** there is no suggested-ignores YAML block
+- **THEN** activating the ignores copy key MUST NOT write an unrelated payload (no-op or key unavailable)
 
 ### Requirement: TUI error modal
 
