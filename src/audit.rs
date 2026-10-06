@@ -86,6 +86,7 @@ struct AuditDtoChildren {
     dependents: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct Advisory {
     id: String,
     module_name: String,

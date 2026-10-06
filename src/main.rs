@@ -32,7 +32,7 @@ fn run() -> Result<RunStatus, Error> {
             let should_auto = gnarl.reset(command.parameters())?;
             if should_auto {
                 // Version already printed above for the reset stdout path.
-                run_verb_inner(Auto, command.options(), false)
+                run_verb_inner(Auto, command.options(), false, true)
             } else {
                 Ok(RunStatus::ok())
             }
@@ -61,24 +61,25 @@ fn run() -> Result<RunStatus, Error> {
 }
 
 fn run_verb(verb: Verb, options: gnarl::cmd::Options) -> Result<RunStatus, Error> {
-    run_verb_inner(verb, options, true)
+    run_verb_inner(verb, options, true, false)
 }
 
 fn run_verb_inner(
     verb: Verb,
     options: gnarl::cmd::Options,
     print_version: bool,
+    refresh_first: bool,
 ) -> Result<RunStatus, Error> {
     let mode = select_ui_mode(std::io::stdout().is_terminal(), options.raw(), verb);
     match mode {
-        UiMode::Interactive => tui::run_interactive(verb, options, VERSION),
+        UiMode::Interactive => tui::run_interactive(verb, options, VERSION, refresh_first),
         UiMode::Stdout => {
             if print_version {
                 out_info!("gnarl {VERSION}");
             }
             let mut gnarl = Gnarl::with_reporter(options, stdout_reporter())?;
             match verb {
-                Auto => gnarl.auto(),
+                Auto => gnarl.auto(refresh_first),
                 Check => gnarl.check(),
                 _ => Ok(RunStatus::ok()),
             }

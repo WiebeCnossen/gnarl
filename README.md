@@ -9,7 +9,7 @@ This is a complete and incompatible rewrite of the Go version.
 # Usage
 
 ```
-gnarl [check | reset <packages> | auto] [-s <severity>] [--raw] [--auto-ignore]
+gnarl [check | reset <packages> | auto] [-s <severity>] [--raw] [--auto-ignore] [-x|--install-on-change]
 ```
 
 ## Auto
@@ -29,12 +29,14 @@ This is the default operation. It will do
 
 ```
 gnarl [-s <severity>]
-gnarl auto --raw --auto-ignore
+gnarl auto --raw --auto-ignore --install-on-change
 ```
 
 `--auto-ignore` is valid only on `auto` (including default `auto`). Advisory-driven reset and applied-ignore messages include severity. Within-range resets and deprecations do not affect the policy exit. A bot chooses pull/merge request vs direct push from that code; gnarl has no hosting client.
 
 Without `--auto-ignore`, suggested ignores stay paste-only. `--raw` only forces tagged stdout (no TUI), independent of `--auto-ignore`.
+
+`-x` / `--install-on-change` skips the opening `install`+`dedupe` of `auto`. Install+dedupe still run after this process mutates `package.json` (unused resolutions) or `yarn.lock` (within-range reset, ignore-hygiene package reset, or a chained `reset`). Yarnrc-only writes (including `--auto-ignore`) do not trigger a refresh. Best practice for bots, after the job’s own `yarn install`, is `gnarl auto --raw --auto-ignore --install-on-change`. Interactive use after local dependency edits should omit the flag so `auto` still opens with install+dedupe.
 
 ## Exit codes
 

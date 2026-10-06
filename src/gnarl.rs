@@ -25,6 +25,8 @@ pub struct Gnarl {
     /// Printed `{package} blocked by {other}@{version}` keys for this process run.
     blocked_by: HashSet<String>,
     reporter: SharedReporter,
+    /// Last `yarn npm audit` with ignores cleared; valid until install/dedupe.
+    cached_unfiltered: Option<Vec<Advisory>>,
 }
 
 struct Classification {
@@ -52,6 +54,7 @@ impl Gnarl {
             reset: HashSet::new(),
             blocked_by: HashSet::new(),
             reporter,
+            cached_unfiltered: None,
         })
     }
 
@@ -59,10 +62,47 @@ impl Gnarl {
         Yarn::with_reporter(self.options.severity(), self.reporter.clone())
     }
 
+    fn invalidate_audit_cache(&mut self) {
+        self.cached_unfiltered = None;
+    }
+
+    fn refresh_tree(&mut self, yarn: &Yarn) -> Result<(), Error> {
+        self.reporter
+            .emit(UiEvent::Phase(crate::ui::Phase::Install));
+        yarn.install()?;
+        self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Dedupe));
+        yarn.dedupe()?;
+        self.invalidate_audit_cache();
+        Ok(())
+    }
+
+    fn unfiltered_advisories(&mut self, yarn: &Yarn) -> Result<Vec<Advisory>, Error> {
+        if let Some(cached) = &self.cached_unfiltered {
+            return Ok(cached.clone());
+        }
+        let advisories = yarn.audit_unfiltered()?;
+        self.cached_unfiltered = Some(advisories.clone());
+        Ok(advisories)
+    }
+
+    fn filtered_advisories(&mut self, yarn: &Yarn) -> Result<Vec<Advisory>, Error> {
+        let all = self.unfiltered_advisories(yarn)?;
+        let ignores: HashSet<String> = yarn
+            .yarnrc()?
+            .npm_audit_ignore_advisories()
+            .into_iter()
+            .collect();
+        Ok(filter_cached_audit(
+            &all,
+            &ignores,
+            self.options.severity(),
+        ))
+    }
+
     pub fn check(&mut self) -> Result<RunStatus, Error> {
         self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Report));
         let mut yarn = self.yarn()?;
-        let advisories = yarn.audit()?;
+        let advisories = self.filtered_advisories(&yarn)?;
         let class = self.classify(&mut yarn, advisories, true)?;
         self.emit_report(&yarn, class)?;
         Ok(RunStatus::ok())
@@ -217,23 +257,23 @@ impl Gnarl {
         self.reset
             .extend(packages.iter().map(|p| p.as_ref().to_string()));
         let dirty = self.yarn()?.locks()?.reset(packages)?;
-        Ok(dirty && !self.options.no_install())
+        Ok(reset_chains_into_auto(dirty))
     }
 
-    pub fn auto(&mut self) -> Result<RunStatus, Error> {
+    pub fn auto(&mut self, refresh_first: bool) -> Result<RunStatus, Error> {
+        let mut refresh =
+            should_open_with_refresh(self.options.install_on_change(), refresh_first);
         let _: () = loop {
             let mut yarn = self.yarn()?;
-            self.reporter
-                .emit(UiEvent::Phase(crate::ui::Phase::Install));
-            yarn.install()?;
-            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Dedupe));
-            yarn.dedupe()?;
+            if refresh {
+                self.refresh_tree(&yarn)?;
+            }
 
             let mut dirty = false;
             let mut resets = vec![];
             let mut reset_severities = HashMap::new();
             self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Audit));
-            let mut advisories = yarn.audit()?;
+            let mut advisories = self.filtered_advisories(&yarn)?;
             self.reporter.emit(UiEvent::Activity {
                 kind: ActivityKind::Info,
                 message: format!("{} advisories", advisories.len()),
@@ -255,7 +295,7 @@ impl Gnarl {
                 }
             }
 
-            if !dirty || self.options.no_install() {
+            if !should_continue_after_within_range(dirty) {
                 break;
             }
 
@@ -263,6 +303,7 @@ impl Gnarl {
                 yarn.locks()?
                     .reset_with_severities(&resets, &reset_severities)?;
                 self.reset.extend(resets);
+                refresh = true;
             }
         };
 
@@ -271,10 +312,9 @@ impl Gnarl {
         let mut yarn = self.yarn()?;
         let resolutions_dirty = yarn.reset_resolutions()?;
         let ignore_resets = self.reset_ignored_advisories(&mut yarn)?;
-        if (resolutions_dirty || !ignore_resets.is_empty()) && !self.options.no_install() {
+        if should_hygiene_refresh(resolutions_dirty, !ignore_resets.is_empty()) {
             let yarn = self.yarn()?;
-            yarn.install()?;
-            yarn.dedupe()?;
+            self.refresh_tree(&yarn)?;
         }
 
         let policy = if self.options.auto_ignore() {
@@ -288,7 +328,7 @@ impl Gnarl {
 
     fn persist_suggested_ignores(&mut self) -> Result<RunStatus, Error> {
         let mut yarn = self.yarn()?;
-        let advisories = yarn.audit()?;
+        let advisories = self.filtered_advisories(&yarn)?;
         let class = self.classify(&mut yarn, advisories, false)?;
         let mut yarnrc = yarn.yarnrc()?;
         let existing: HashSet<String> = yarnrc.npm_audit_ignore_advisories().into_iter().collect();
@@ -320,7 +360,7 @@ impl Gnarl {
             return Ok(());
         }
 
-        let unfiltered = yarn.audit_unfiltered()?;
+        let unfiltered = self.unfiltered_advisories(yarn)?;
         let by_id: HashMap<&str, &Advisory> = unfiltered
             .iter()
             .map(|advisory| (advisory.id(), advisory))
@@ -385,7 +425,7 @@ impl Gnarl {
             return Ok(Vec::new());
         }
 
-        let unfiltered = yarn.audit_unfiltered()?;
+        let unfiltered = self.unfiltered_advisories(yarn)?;
         let by_id: HashMap<String, Advisory> = unfiltered
             .into_iter()
             .map(|advisory| (advisory.id().to_owned(), advisory))
@@ -712,6 +752,39 @@ fn add_fix(
         });
 }
 
+pub(crate) fn should_open_with_refresh(install_on_change: bool, refresh_first: bool) -> bool {
+    refresh_first || !install_on_change
+}
+
+pub(crate) fn should_continue_after_within_range(dirty: bool) -> bool {
+    dirty
+}
+
+pub(crate) fn should_hygiene_refresh(
+    resolutions_dirty: bool,
+    ignore_package_resets: bool,
+) -> bool {
+    resolutions_dirty || ignore_package_resets
+}
+
+pub(crate) fn reset_chains_into_auto(lockfile_dirty: bool) -> bool {
+    lockfile_dirty
+}
+
+fn filter_cached_audit(
+    all: &[Advisory],
+    ignores: &HashSet<String>,
+    threshold: Severity,
+) -> Vec<Advisory> {
+    all.iter()
+        .filter(|advisory| {
+            advisory.severity().meets_threshold(threshold)
+                && !ignores.contains(advisory.id())
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,5 +858,72 @@ mod tests {
         note_reset_severity(&mut map, "lodash", Severity::Moderate);
         note_reset_severity(&mut map, "lodash", Severity::Critical);
         assert_eq!(map.get("lodash"), Some(&Severity::Critical));
+    }
+
+    #[test]
+    fn opening_refresh_default_auto() {
+        assert!(should_open_with_refresh(false, false));
+    }
+
+    #[test]
+    fn opening_refresh_skipped_on_install_on_change() {
+        assert!(!should_open_with_refresh(true, false));
+    }
+
+    #[test]
+    fn opening_refresh_after_reset_chain() {
+        assert!(should_open_with_refresh(true, true));
+    }
+
+    #[test]
+    fn within_range_reset_continues_loop_and_schedules_refresh() {
+        assert!(should_continue_after_within_range(true));
+        assert!(should_open_with_refresh(true, true));
+        assert!(!should_continue_after_within_range(false));
+    }
+
+    #[test]
+    fn hygiene_refreshes_on_package_json_or_lockfile_resets_even_with_install_on_change() {
+        assert!(should_hygiene_refresh(true, false));
+        assert!(should_hygiene_refresh(false, true));
+        assert!(!should_hygiene_refresh(false, false));
+    }
+
+    #[test]
+    fn yarnrc_only_does_not_hygiene_refresh() {
+        assert!(!should_hygiene_refresh(false, false));
+    }
+
+    #[test]
+    fn dirty_reset_chains_and_opens_auto_with_install() {
+        assert!(reset_chains_into_auto(true));
+        assert!(should_open_with_refresh(true, true));
+        assert!(!reset_chains_into_auto(false));
+    }
+
+    fn sample_advisory(id: &str, severity: Severity) -> Advisory {
+        Advisory::new(
+            id.to_owned(),
+            "left-pad".to_owned(),
+            severity,
+            parse::parse_range("<1.3.0").unwrap(),
+            vec![],
+            vec![],
+            None,
+        )
+    }
+
+    #[test]
+    fn cached_audit_filter_drops_ignores_and_below_threshold() {
+        let all = vec![
+            sample_advisory("1", Severity::Low),
+            sample_advisory("2", Severity::High),
+            sample_advisory("3", Severity::Critical),
+        ];
+        let mut ignores = HashSet::new();
+        ignores.insert("2".into());
+        let filtered = filter_cached_audit(&all, &ignores, Severity::High);
+        let ids: Vec<_> = filtered.iter().map(Advisory::id).collect();
+        assert_eq!(ids, vec!["3"]);
     }
 }

@@ -1,8 +1,6 @@
-## Purpose
+# Spec Delta
 
-After unused `package.json` resolutions are dropped in auto mode, refresh the lockfile with install + dedupe when installs are enabled.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Refresh lockfile after dropping unused resolutions
 

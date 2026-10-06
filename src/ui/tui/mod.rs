@@ -63,6 +63,7 @@ pub fn run_interactive(
     verb: Verb,
     options: crate::cmd::Options,
     version: &str,
+    refresh_first: bool,
 ) -> Result<RunStatus, Error> {
     let (tx, rx) = mpsc::channel::<UiEvent>();
     let reporter: SharedReporter = Arc::new(ChannelReporter { tx });
@@ -72,7 +73,7 @@ pub fn run_interactive(
         let result = (|| {
             let mut gnarl = Gnarl::with_reporter(options, reporter.clone())?;
             match verb {
-                Verb::Auto => gnarl.auto(),
+                Verb::Auto => gnarl.auto(refresh_first),
                 Verb::Check => gnarl.check(),
                 _ => Ok(RunStatus::ok()),
             }

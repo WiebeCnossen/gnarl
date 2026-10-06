@@ -6,7 +6,7 @@ use crate::ui::{UiMode, select_ui_mode};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
-    no_install: bool,
+    install_on_change: bool,
     severity: Severity,
     raw: bool,
     auto_ignore: bool,
@@ -14,14 +14,14 @@ pub struct Options {
 
 impl Options {
     fn read(args: &mut Vec<String>) -> Result<Self, crate::Error> {
-        let mut no_install = false;
+        let mut install_on_change = false;
         let mut severity = Severity::Info;
         let mut raw = false;
         let mut auto_ignore = false;
         for i in (0..args.len()).rev() {
             match args[i].as_str() {
-                "-x" => {
-                    no_install = true;
+                "-x" | "--install-on-change" => {
+                    install_on_change = true;
                     args.remove(i);
                 }
                 "--raw" => {
@@ -42,15 +42,15 @@ impl Options {
         }
 
         Ok(Self {
-            no_install,
+            install_on_change,
             severity,
             raw,
             auto_ignore,
         })
     }
 
-    pub fn no_install(&self) -> bool {
-        self.no_install
+    pub fn install_on_change(&self) -> bool {
+        self.install_on_change
     }
 
     pub fn severity(&self) -> Severity {
@@ -142,13 +142,14 @@ pub fn help_lines() -> &'static [&'static str] {
     &[
         "the yarn v4 companion tool",
         "usage: gnarl [<auto | reset | check | info | help> <args>]",
-        "> gnarl [auto] [--raw] [--auto-ignore] [-x] [-s <severity>]",
-        "> gnarl reset [--raw] [-x] package-names...",
+        "> gnarl [auto] [--raw] [--auto-ignore] [-x|--install-on-change] [-s <severity>]",
+        "> gnarl reset [--raw] [-x|--install-on-change] package-names...",
         "> gnarl check [--raw]",
         "> gnarl info",
         "> gnarl help",
         "--raw  force tagged stdout even on a TTY",
         "--auto-ignore  on auto: persist suggested ignores; policy exit is max new-ignore severity",
+        "-x, --install-on-change  skip opening install+dedupe; still refresh after this-run package.json or yarn.lock changes",
         "exit 0   success (no new ignores, or without --auto-ignore)",
         "exit 1   tool error",
         "exit 10  auto --auto-ignore: max new ignore is info",
@@ -190,7 +191,7 @@ mod tests {
         let cmd = parse(&["check", "--raw", "-x", "-s", "high"]);
         assert_eq!(cmd.verb(), Verb::Check);
         assert!(cmd.options().raw());
-        assert!(cmd.options().no_install());
+        assert!(cmd.options().install_on_change());
         assert_eq!(cmd.options().severity(), Severity::High);
         assert!(!cmd.options().auto_ignore());
     }
@@ -200,6 +201,36 @@ mod tests {
         let cmd = parse(&["auto"]);
         assert!(!cmd.options().raw());
         assert!(!cmd.options().auto_ignore());
+        assert!(!cmd.options().install_on_change());
+    }
+
+    #[test]
+    fn parses_install_on_change_short_on_auto() {
+        let cmd = parse(&["auto", "-x"]);
+        assert_eq!(cmd.verb(), Verb::Auto);
+        assert!(cmd.options().install_on_change());
+    }
+
+    #[test]
+    fn parses_install_on_change_long_on_auto() {
+        let cmd = parse(&["auto", "--install-on-change"]);
+        assert_eq!(cmd.verb(), Verb::Auto);
+        assert!(cmd.options().install_on_change());
+    }
+
+    #[test]
+    fn parses_install_on_change_on_reset() {
+        let cmd = parse(&["reset", "--install-on-change", "lodash"]);
+        assert_eq!(cmd.verb(), Verb::Reset);
+        assert!(cmd.options().install_on_change());
+        assert_eq!(cmd.parameters(), &["lodash".to_owned()]);
+    }
+
+    #[test]
+    fn default_auto_does_not_set_install_on_change() {
+        let cmd = parse(&[]);
+        assert_eq!(cmd.verb(), Verb::Auto);
+        assert!(!cmd.options().install_on_change());
     }
 
     #[test]
@@ -248,5 +279,18 @@ mod tests {
         assert!(help.contains("exit 13  auto --auto-ignore: max new ignore is high"));
         assert!(help.contains("exit 14  auto --auto-ignore: max new ignore is critical"));
         assert!(help.contains("--raw"));
+        assert!(help.contains("-x"));
+        assert!(help.contains("--install-on-change"));
+        assert!(help.contains("skip opening install+dedupe"));
+        assert!(help.contains("package.json"));
+        assert!(help.contains("yarn.lock"));
+    }
+
+    #[test]
+    fn readme_documents_bot_best_practice() {
+        let readme = include_str!("../README.md");
+        assert!(readme.contains("gnarl auto --raw --auto-ignore --install-on-change"));
+        assert!(readme.contains("--install-on-change"));
+        assert!(readme.contains("`-x`"));
     }
 }
