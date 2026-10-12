@@ -61,6 +61,19 @@ impl Packument {
             .ok_or(format!("Version {} not found", version).into())
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(versions: &[&str]) -> Self {
+        let mut versions: Vec<_> = versions
+            .iter()
+            .map(|v| PackumentVersion {
+                version: parse::parse_version(v).unwrap(),
+                dependencies: HashMap::new(),
+            })
+            .collect();
+        versions.sort_unstable_by(|a, b| a.version.cmp(&b.version));
+        Self { versions }
+    }
+
     fn from_dto(dto: PackumentDto, reporter: &dyn crate::ui::Reporter) -> Result<Self, Error> {
         let time = dto
             .time

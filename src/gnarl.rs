@@ -166,35 +166,37 @@ impl Gnarl {
                         .ok_or_else(|| format!("Resolution for {} not found", tree_version))?;
                     for request in resolution.requests() {
                         let original_request = resolution.original(request)?;
-                        if let Some(fix) = get_fix(
+                        match classify_request(
                             packument,
                             advisory.vulnerable_versions(),
-                            advisory.tree_versions().last().unwrap(),
+                            tree_version,
                             request,
                         ) {
-                            add_fix(
-                                &mut fixes,
-                                advisory.module_name(),
-                                original_request,
-                                fix,
-                            );
-                        } else if let Some(fix) =
-                            get_resolution(packument, advisory.vulnerable_versions(), request)
-                        {
-                            add_fix(
-                                &mut resolutions,
-                                advisory.module_name(),
-                                original_request,
-                                fix,
-                            );
-                            record_ignore_suggestion(&mut ignore_suggestions, &advisory);
-                        } else {
-                            errors.push(format!(
-                                "\"{}@{}\"",
-                                advisory.module_name(),
-                                original_request
-                            ));
-                            record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                            RequestClass::Fix(fix) => {
+                                add_fix(
+                                    &mut fixes,
+                                    advisory.module_name(),
+                                    original_request,
+                                    fix,
+                                );
+                            }
+                            RequestClass::Resolution(fix) => {
+                                add_fix(
+                                    &mut resolutions,
+                                    advisory.module_name(),
+                                    original_request,
+                                    fix,
+                                );
+                                record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                            }
+                            RequestClass::Unresolved => {
+                                errors.push(format!(
+                                    "\"{}@{}\"",
+                                    advisory.module_name(),
+                                    original_request
+                                ));
+                                record_ignore_suggestion(&mut ignore_suggestions, &advisory);
+                            }
                         }
                     }
                 }
@@ -202,7 +204,7 @@ impl Gnarl {
             locks.len()
         };
 
-        fixes.retain(|key, _| !resolutions.contains_key(key));
+        prefer_fixes_over_resolutions(&mut fixes, &mut resolutions);
 
         Ok(Classification {
             deprecations,
@@ -272,58 +274,66 @@ impl Gnarl {
         let mut refresh =
             should_open_with_refresh(self.options.install_on_change(), refresh_first);
         let _: () = loop {
+            let _: () = loop {
+                let mut yarn = self.yarn()?;
+                if refresh {
+                    self.refresh_tree(&yarn)?;
+                }
+
+                let mut dirty = false;
+                let mut resets = vec![];
+                let mut reset_severities = HashMap::new();
+                self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Audit));
+                let mut advisories = self.filtered_advisories(&yarn)?;
+                self.reporter.emit(UiEvent::Activity {
+                    kind: ActivityKind::Info,
+                    message: format!("{} advisories", advisories.len()),
+                });
+                let mut done = HashSet::new();
+
+                self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Fix));
+                while let Some(advisory) = advisories.pop() {
+                    if done.insert(format!("{} {}", advisory.id(), advisory.module_name()))
+                        && self.fix(&mut yarn, &advisory, &mut advisories)?
+                    {
+                        dirty = true;
+                        note_reset_severity(
+                            &mut reset_severities,
+                            advisory.module_name(),
+                            advisory.severity(),
+                        );
+                        resets.push(advisory.module_name().to_owned());
+                    }
+                }
+
+                if !should_continue_after_within_range(dirty) {
+                    break;
+                }
+
+                if !resets.is_empty() {
+                    yarn.locks()?
+                        .reset_with_severities(&resets, &reset_severities)?;
+                    self.reset.extend(resets);
+                    refresh = true;
+                }
+            };
+
+            self.reporter
+                .emit(UiEvent::Phase(crate::ui::Phase::Hygiene));
             let mut yarn = self.yarn()?;
-            if refresh {
+            let resolutions_dirty = yarn.reset_resolutions()?;
+            let ignore_resets = self.reset_ignored_advisories(&mut yarn)?;
+            if should_hygiene_refresh(resolutions_dirty, !ignore_resets.is_empty()) {
+                let yarn = self.yarn()?;
                 self.refresh_tree(&yarn)?;
-            }
-
-            let mut dirty = false;
-            let mut resets = vec![];
-            let mut reset_severities = HashMap::new();
-            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Audit));
-            let mut advisories = self.filtered_advisories(&yarn)?;
-            self.reporter.emit(UiEvent::Activity {
-                kind: ActivityKind::Info,
-                message: format!("{} advisories", advisories.len()),
-            });
-            let mut done = HashSet::new();
-
-            self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Fix));
-            while let Some(advisory) = advisories.pop() {
-                if done.insert(format!("{} {}", advisory.id(), advisory.module_name()))
-                    && self.fix(&mut yarn, &advisory, &mut advisories)?
-                {
-                    dirty = true;
-                    note_reset_severity(
-                        &mut reset_severities,
-                        advisory.module_name(),
-                        advisory.severity(),
-                    );
-                    resets.push(advisory.module_name().to_owned());
+                if should_reenter_fix_after_hygiene(true) {
+                    self.reset.clear();
+                    refresh = true;
+                    continue;
                 }
             }
-
-            if !should_continue_after_within_range(dirty) {
-                break;
-            }
-
-            if !resets.is_empty() {
-                yarn.locks()?
-                    .reset_with_severities(&resets, &reset_severities)?;
-                self.reset.extend(resets);
-                refresh = true;
-            }
+            break;
         };
-
-        self.reporter
-            .emit(UiEvent::Phase(crate::ui::Phase::Hygiene));
-        let mut yarn = self.yarn()?;
-        let resolutions_dirty = yarn.reset_resolutions()?;
-        let ignore_resets = self.reset_ignored_advisories(&mut yarn)?;
-        if should_hygiene_refresh(resolutions_dirty, !ignore_resets.is_empty()) {
-            let yarn = self.yarn()?;
-            self.refresh_tree(&yarn)?;
-        }
 
         let policy = if self.options.auto_ignore() {
             let written = self.write_classified_ignores()?;
@@ -520,29 +530,9 @@ impl Gnarl {
     ) -> Result<bool, Error> {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
-        let mut fixable = false;
-        let mut blocked = false;
-        let dependents = yarn.locks()?.dependents(advisory.module_name()).to_vec();
-        for dependent in &dependents {
-            let tree_version = match advisory
-                .tree_versions()
-                .iter()
-                .rfind(|v| v.satisfies(dependent.request()))
-            {
-                Some(v) => v,
-                None => continue,
-            };
-            if has_fix(
-                &packument,
-                advisory.vulnerable_versions(),
-                tree_version,
-                dependent.request(),
-            ) {
-                fixable = true;
-            } else {
-                blocked = true;
-            }
-        }
+        let entries = lock_requests_for_advisory(yarn, advisory)?;
+        let (fixable, blocked, _) =
+            within_range_from_lock_requests(&packument, advisory.vulnerable_versions(), &entries);
 
         Ok(fixable && !blocked && !self.reset.contains(advisory.module_name()))
     }
@@ -555,7 +545,12 @@ impl Gnarl {
     ) -> Result<bool, Error> {
         self.npm.retrieve_packument(advisory.module_name())?;
         let packument = self.npm.packument(advisory.module_name()).cloned()?;
-        let mut fixable = false;
+        // Prefer lock descriptor requests (post-resolution), same as classify — not the
+        // dependent's declared range (e.g. 4.7.8 while resolution remapped to ^4.7.9).
+        let entries = lock_requests_for_advisory(yarn, advisory)?;
+        let (mut fixable, _, mut best_fix) =
+            within_range_from_lock_requests(&packument, advisory.vulnerable_versions(), &entries);
+
         let dependents = yarn.locks()?.dependents(advisory.module_name()).to_vec();
         for dependent in &dependents {
             let tree_version = match advisory
@@ -566,13 +561,17 @@ impl Gnarl {
                 Some(v) => v,
                 None => continue,
             };
-            if has_fix(
+            if let Some(fix) = get_fix(
                 &packument,
                 advisory.vulnerable_versions(),
                 tree_version,
                 dependent.request(),
             ) {
                 fixable = true;
+                best_fix = Some(match best_fix {
+                    Some(ref current) if current.gt(fix) => current.clone(),
+                    _ => fix.clone(),
+                });
                 continue;
             }
 
@@ -607,6 +606,9 @@ impl Gnarl {
         }
 
         if fixable && !self.reset.contains(advisory.module_name()) {
+            if let Some(ref safe) = best_fix {
+                yarn.widen_blocking_resolutions(advisory.module_name(), safe)?;
+            }
             return Ok(true);
         }
 
@@ -685,6 +687,76 @@ fn has_fix(
     get_fix(packument, vulnerable_versions, tree_version, request).is_some()
 }
 
+fn lock_requests_for_advisory(
+    yarn: &mut Yarn,
+    advisory: &Advisory,
+) -> Result<Vec<(Version, Vec<Range>)>, Error> {
+    let locks = yarn.locks()?;
+    let mut entries = Vec::new();
+    for lock in locks.for_package(advisory.module_name()) {
+        let Some(tree_version) = lock.package().version() else {
+            continue;
+        };
+        if !advisory
+            .tree_versions()
+            .iter()
+            .any(|v| v == tree_version)
+        {
+            continue;
+        }
+        entries.push((tree_version.clone(), lock.requests().to_vec()));
+    }
+    Ok(entries)
+}
+
+/// Within-range scan over lock descriptor requests (effective ranges after resolutions).
+fn within_range_from_lock_requests(
+    packument: &Packument,
+    vulnerable_versions: &Range,
+    entries: &[(Version, Vec<Range>)],
+) -> (bool, bool, Option<Version>) {
+    let mut fixable = false;
+    let mut blocked = false;
+    let mut best_fix: Option<Version> = None;
+    for (tree_version, requests) in entries {
+        for request in requests {
+            if let Some(fix) =
+                get_fix(packument, vulnerable_versions, tree_version, request)
+            {
+                fixable = true;
+                best_fix = Some(match best_fix {
+                    Some(ref current) if current.gt(fix) => current.clone(),
+                    _ => fix.clone(),
+                });
+            } else {
+                blocked = true;
+            }
+        }
+    }
+    (fixable, blocked, best_fix)
+}
+
+enum RequestClass<'a> {
+    Fix(&'a Version),
+    Resolution(&'a Version),
+    Unresolved,
+}
+
+fn classify_request<'a>(
+    packument: &'a Packument,
+    vulnerable_versions: &Range,
+    tree_version: &Version,
+    request: &Range,
+) -> RequestClass<'a> {
+    if let Some(fix) = get_fix(packument, vulnerable_versions, tree_version, request) {
+        RequestClass::Fix(fix)
+    } else if let Some(fix) = get_resolution(packument, vulnerable_versions, request) {
+        RequestClass::Resolution(fix)
+    } else {
+        RequestClass::Unresolved
+    }
+}
+
 fn get_fix<'a>(
     packument: &'a Packument,
     vulnerable_versions: &Range,
@@ -707,6 +779,17 @@ fn get_resolution<'a>(
         request.outside(version, OutsideDirection::Higher, false) == Ok(true)
             && !vulnerable_versions.satisfies(version)
     })
+}
+
+fn prefer_fixes_over_resolutions(
+    fixes: &mut BTreeMap<String, SuggestedFix>,
+    resolutions: &mut BTreeMap<String, SuggestedFix>,
+) {
+    resolutions.retain(|key, _| !fixes.contains_key(key));
+}
+
+pub(crate) fn should_reenter_fix_after_hygiene(hygiene_refreshed: bool) -> bool {
+    hygiene_refreshed
 }
 
 fn emit_section(reporter: &dyn crate::ui::Reporter, title: &str, lines: Vec<String>) {
@@ -1037,5 +1120,90 @@ mod tests {
             true,
             APPLY_RESOLUTIONS_REFRESH_FIRST
         ));
+    }
+
+    #[test]
+    fn classify_uses_lock_entry_tree_version_not_sibling_last() {
+        let packument = Packument::for_test(&["1.0.0", "1.0.1", "2.0.0", "2.0.1"]);
+        let vulnerable = parse::parse_range("<1.0.1 || >=2.0.0 <2.0.1").unwrap();
+        let tree_v1 = parse::parse_version("1.0.0").unwrap();
+        let request_v1 = parse::parse_range("^1.0.0").unwrap();
+        // Sibling last would be 2.0.0; using that would miss the within-range 1.0.1 fix.
+        match classify_request(&packument, &vulnerable, &tree_v1, &request_v1) {
+            RequestClass::Fix(v) => assert_eq!(v.to_string(), "1.0.1"),
+            RequestClass::Resolution(v) => panic!("expected Fix(1.0.1), got Resolution({v})"),
+            RequestClass::Unresolved => panic!("expected Fix(1.0.1), got Unresolved"),
+        }
+    }
+
+    #[test]
+    fn prefer_fixes_keeps_fix_when_same_key_also_in_resolutions() {
+        let mut fixes = BTreeMap::new();
+        let mut resolutions = BTreeMap::new();
+        fixes.insert(
+            "pkg@^1".into(),
+            SuggestedFix {
+                version: parse::parse_version("1.0.1").unwrap(),
+            },
+        );
+        resolutions.insert(
+            "pkg@^1".into(),
+            SuggestedFix {
+                version: parse::parse_version("2.0.0").unwrap(),
+            },
+        );
+        prefer_fixes_over_resolutions(&mut fixes, &mut resolutions);
+        assert!(fixes.contains_key("pkg@^1"));
+        assert!(!resolutions.contains_key("pkg@^1"));
+    }
+
+    #[test]
+    fn hygiene_refresh_reenters_within_range_fix_loop() {
+        assert!(should_reenter_fix_after_hygiene(true));
+        assert!(!should_reenter_fix_after_hygiene(false));
+    }
+
+    #[test]
+    fn only_outside_range_work_leaves_fixes_empty_after_prefer() {
+        let mut fixes = BTreeMap::new();
+        let mut resolutions = BTreeMap::new();
+        resolutions.insert(
+            "pkg@^1".into(),
+            SuggestedFix {
+                version: parse::parse_version("2.0.0").unwrap(),
+            },
+        );
+        prefer_fixes_over_resolutions(&mut fixes, &mut resolutions);
+        assert!(fixes.is_empty());
+        assert!(resolutions.contains_key("pkg@^1"));
+    }
+
+    #[test]
+    fn caret_resolution_already_admitting_safe_version_needs_no_widen() {
+        let range = parse::parse_range("^1.0.0").unwrap();
+        let safe = parse::parse_version("1.0.1").unwrap();
+        assert!(range.satisfies(&safe));
+    }
+
+    #[test]
+    fn lock_request_after_resolution_triggers_within_range_not_dependent_exact() {
+        // Dependent still declares handlebars@4.7.8; resolution remaps to ^4.7.9 in the lock.
+        let packument = Packument::for_test(&["4.7.8", "4.7.9", "4.7.10"]);
+        let vulnerable = parse::parse_range(">=4.0.0 <=4.7.9").unwrap();
+        let tree = parse::parse_version("4.7.9").unwrap();
+        let lock_request = parse::parse_range("^4.7.9").unwrap();
+        let dependent_request = parse::parse_range("4.7.8").unwrap();
+
+        assert!(
+            get_fix(&packument, &vulnerable, &tree, &dependent_request).is_none(),
+            "dependent exact 4.7.8 must not see 4.7.10 as within-range"
+        );
+
+        let entries = vec![(tree.clone(), vec![lock_request])];
+        let (fixable, blocked, best) =
+            within_range_from_lock_requests(&packument, &vulnerable, &entries);
+        assert!(fixable);
+        assert!(!blocked);
+        assert_eq!(best.unwrap().to_string(), "4.7.10");
     }
 }

@@ -87,6 +87,36 @@ impl Project {
             .remove(package);
     }
 
+    /// Widen exact/blocking resolution pins so `safe_version` can apply (`^{version}`).
+    /// Leaves entries that already satisfy `safe_version` unchanged.
+    pub fn widen_blocking_resolutions(
+        &mut self,
+        package_name: &str,
+        safe_version: &nodejs_semver::Version,
+    ) -> Result<bool, crate::Error> {
+        let mut dirty = false;
+        let caret = format!("^{safe_version}");
+        let entries: Vec<(String, String)> = self.resolutions().into_iter().collect();
+        for (key, value) in entries {
+            let (name, _) = crate::parse::split_name(&key).unwrap_or((key.as_str(), "*"));
+            if name != package_name {
+                continue;
+            }
+            let Ok(range) = crate::parse::parse_range(&value) else {
+                continue;
+            };
+            if range.satisfies(safe_version) {
+                continue;
+            }
+            self.set_resolution(&key, caret.clone());
+            dirty = true;
+        }
+        if dirty {
+            self.save()?;
+        }
+        Ok(dirty)
+    }
+
     pub fn save(&self) -> Result<(), crate::Error> {
         // Write back with pretty printing (4 spaces indent, like npm/yarn usually do)
         let file_out = File::create(&self.path)?;
@@ -134,6 +164,36 @@ mod tests {
         let before = fs::read_to_string(&path).unwrap();
         let mut project = Project::read(path.clone()).unwrap();
         assert!(!project.apply_suggested_resolutions(&[]).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn widen_blocking_resolutions_updates_exact_pin_to_caret_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_pkg(
+            dir.path(),
+            r#"{"resolutions":{"left-pad":"1.0.0","keep@^1":"^1.0.0"}}"#,
+        );
+        let mut project = Project::read(path.clone()).unwrap();
+        let safe = nodejs_semver::Version::parse("1.0.1").unwrap();
+        assert!(project.widen_blocking_resolutions("left-pad", &safe).unwrap());
+        let again = Project::read(path).unwrap();
+        let res = again.resolutions();
+        assert_eq!(res.get("left-pad").map(String::as_str), Some("^1.0.1"));
+        assert_eq!(res.get("keep@^1").map(String::as_str), Some("^1.0.0"));
+    }
+
+    #[test]
+    fn widen_blocking_resolutions_skips_caret_that_already_admits_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_pkg(
+            dir.path(),
+            r#"{"resolutions":{"left-pad":"^1.0.0"}}"#,
+        );
+        let mut project = Project::read(path.clone()).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let safe = nodejs_semver::Version::parse("1.0.1").unwrap();
+        assert!(!project.widen_blocking_resolutions("left-pad", &safe).unwrap());
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
     }
 }

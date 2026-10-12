@@ -87,6 +87,15 @@ impl Yarn {
         self.project.apply_suggested_resolutions(entries)
     }
 
+    pub fn widen_blocking_resolutions(
+        &mut self,
+        package_name: &str,
+        safe_version: &nodejs_semver::Version,
+    ) -> Result<bool, Error> {
+        self.project
+            .widen_blocking_resolutions(package_name, safe_version)
+    }
+
     fn run(&self, prefer_aikido: bool, args: &[&str]) -> Result<Output, Error> {
         let mut args = args.to_vec();
         let (executable, name) = match prefer_aikido {
