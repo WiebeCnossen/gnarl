@@ -4,7 +4,7 @@ use nodejs_semver::{OutsideDirection, Range, Version};
 
 use crate::{
     Error, RunStatus,
-    audit::{Advisory, Severity},
+    audit::{Advisory, DependencyEnvironment, Severity},
     check::Kpis,
     cmd::Options,
     npm::{Npm, Packument},
@@ -12,8 +12,8 @@ use crate::{
     parse,
     status,
     ui::{
-        ActivityKind, SharedReporter, UiEvent, format_ignore_yaml, format_resolution_line,
-        format_section_lines, stdout_reporter,
+        ActivityKind, SharedReporter, UiEvent, format_ignore_enrichment_line, format_ignore_yaml,
+        format_resolution_line, format_section_lines, format_unresolved_issue_line, stdout_reporter,
     },
     yarn::Yarn,
 };
@@ -27,15 +27,23 @@ pub struct Gnarl {
     reporter: SharedReporter,
     /// Last `yarn npm audit` with ignores cleared; valid until install/dedupe.
     cached_unfiltered: Option<Vec<Advisory>>,
+    /// Advisory IDs from production-environment audit; valid until install/dedupe.
+    cached_production_ids: Option<HashSet<String>>,
 }
 
 struct Classification {
     deprecations: Vec<String>,
     fixes: BTreeMap<String, SuggestedFix>,
     resolutions: BTreeMap<String, SuggestedFix>,
-    errors: Vec<String>,
+    errors: Vec<UnresolvedIssue>,
     ignore_suggestions: BTreeMap<String, IgnoreSuggestion>,
     lock_len: usize,
+}
+
+struct UnresolvedIssue {
+    module_name: String,
+    request: String,
+    advisory_id: String,
 }
 
 struct SuggestedFix {
@@ -55,6 +63,7 @@ impl Gnarl {
             blocked_by: HashSet::new(),
             reporter,
             cached_unfiltered: None,
+            cached_production_ids: None,
         })
     }
 
@@ -64,6 +73,13 @@ impl Gnarl {
 
     fn invalidate_audit_cache(&mut self) {
         self.cached_unfiltered = None;
+        self.cached_production_ids = None;
+    }
+
+    fn production_ids(&mut self, yarn: &Yarn) -> Result<&HashSet<String>, Error> {
+        get_or_fetch_production_ids(&mut self.cached_production_ids, || {
+            yarn.audit_production_ids()
+        })
     }
 
     fn refresh_tree(&mut self, yarn: &Yarn) -> Result<(), Error> {
@@ -123,12 +139,7 @@ impl Gnarl {
             for advisory in &advisories {
                 self.reporter.emit(UiEvent::Activity {
                     kind: ActivityKind::Hit,
-                    message: format!(
-                        "{}: {}@{}",
-                        advisory.label(),
-                        advisory.module_name(),
-                        advisory.vulnerable_versions()
-                    ),
+                    message: format_hit_line(advisory),
                 });
             }
         }
@@ -190,11 +201,11 @@ impl Gnarl {
                                 record_ignore_suggestion(&mut ignore_suggestions, &advisory);
                             }
                             RequestClass::Unresolved => {
-                                errors.push(format!(
-                                    "\"{}@{}\"",
-                                    advisory.module_name(),
-                                    original_request
-                                ));
+                                errors.push(UnresolvedIssue {
+                                    module_name: advisory.module_name().to_owned(),
+                                    request: original_request.to_owned(),
+                                    advisory_id: advisory.id().to_owned(),
+                                });
                                 record_ignore_suggestion(&mut ignore_suggestions, &advisory);
                             }
                         }
@@ -256,7 +267,22 @@ impl Gnarl {
                 .map(|(k, v)| format_resolution_line(k, &v.version))
                 .collect(),
         );
-        emit_section(&*self.reporter, "unresolved issues", class.errors);
+
+        let unresolved_lines = if class.errors.is_empty() {
+            Vec::new()
+        } else {
+            let production_ids = self.production_ids(yarn)?;
+            class
+                .errors
+                .iter()
+                .map(|issue| {
+                    let env =
+                        DependencyEnvironment::classify(&issue.advisory_id, production_ids);
+                    format_unresolved_issue_line(&issue.module_name, &issue.request, env)
+                })
+                .collect()
+        };
+        emit_section(&*self.reporter, "unresolved issues", unresolved_lines);
         self.print_suggested_ignores(yarn, class.ignore_suggestions)?;
         self.reporter.emit(UiEvent::ReportComplete);
         self.reporter.emit(UiEvent::Phase(crate::ui::Phase::Done));
@@ -413,12 +439,11 @@ impl Gnarl {
         let mut lines = Vec::new();
         for id in &ignores {
             match by_id.get(id.as_str()) {
-                Some(advisory) => lines.push(format!(
-                    "{}  {}  {}@{}",
+                Some(advisory) => lines.push(format_ignore_overview_line(
                     id,
                     advisory.severity(),
                     advisory.module_name(),
-                    advisory.vulnerable_versions()
+                    advisory.vulnerable_versions(),
                 )),
                 None => lines.push(format!("{}  unknown", id)),
             }
@@ -429,7 +454,7 @@ impl Gnarl {
     }
 
     fn print_suggested_ignores(
-        &self,
+        &mut self,
         yarn: &Yarn,
         suggestions: BTreeMap<String, IgnoreSuggestion>,
     ) -> Result<(), Error> {
@@ -446,12 +471,17 @@ impl Gnarl {
             return Ok(());
         }
 
+        let production_ids = self.production_ids(yarn)?;
         let lines: Vec<String> = to_write
             .iter()
             .map(|s| {
-                format!(
-                    "{}  {}  {}@{}",
-                    s.id, s.severity, s.module_name, s.vulnerable_versions
+                let env = DependencyEnvironment::classify(&s.id, production_ids);
+                format_ignore_enrichment_line(
+                    &s.id,
+                    s.severity,
+                    &s.module_name,
+                    &s.vulnerable_versions,
+                    env,
                 )
             })
             .collect();
@@ -893,6 +923,37 @@ fn record_ignore_suggestion(
     });
 }
 
+/// Cache helper for production advisory IDs. Fetches at most once until the cache is cleared.
+fn get_or_fetch_production_ids(
+    cache: &mut Option<HashSet<String>>,
+    fetch: impl FnOnce() -> Result<HashSet<String>, Error>,
+) -> Result<&HashSet<String>, Error> {
+    if cache.is_none() {
+        *cache = Some(fetch()?);
+    }
+    Ok(cache.as_ref().unwrap())
+}
+
+/// Current-ignore overview enrichment (no production/dev-only label).
+fn format_ignore_overview_line(
+    id: &str,
+    severity: impl std::fmt::Display,
+    module_name: &str,
+    vulnerable_versions: impl std::fmt::Display,
+) -> String {
+    format!("{id}  {severity}  {module_name}@{vulnerable_versions}")
+}
+
+/// Activity hit line for an advisory (no production/dev-only label).
+fn format_hit_line(advisory: &Advisory) -> String {
+    format!(
+        "{}: {}@{}",
+        advisory.label(),
+        advisory.module_name(),
+        advisory.vulnerable_versions()
+    )
+}
+
 fn add_fix(
     map: &mut BTreeMap<String, SuggestedFix>,
     package: &str,
@@ -1085,6 +1146,82 @@ mod tests {
         let filtered = filter_cached_audit(&all, &ignores, Severity::High);
         let ids: Vec<_> = filtered.iter().map(Advisory::id).collect();
         assert_eq!(ids, vec!["3"]);
+    }
+
+    #[test]
+    fn production_ids_cache_fetches_once_when_warm() {
+        let mut cache = None;
+        let mut fetches = 0;
+        let first = get_or_fetch_production_ids(&mut cache, || {
+            fetches += 1;
+            let mut set = HashSet::new();
+            set.insert("a".into());
+            Ok(set)
+        })
+        .unwrap()
+        .clone();
+        let second = get_or_fetch_production_ids(&mut cache, || {
+            fetches += 1;
+            Ok(HashSet::new())
+        })
+        .unwrap()
+        .clone();
+        assert_eq!(fetches, 1);
+        assert_eq!(first, second);
+        assert!(first.contains("a"));
+    }
+
+    #[test]
+    fn production_ids_fetch_error_propagates_without_caching() {
+        let mut cache = None;
+        let err = get_or_fetch_production_ids(&mut cache, || Err("audit failed".into()));
+        assert!(err.is_err());
+        assert!(cache.is_none());
+    }
+
+    #[test]
+    fn overview_and_hit_lines_omit_environment_labels() {
+        let overview = format_ignore_overview_line("1090865", "high", "left-pad", "<1.0.0");
+        assert_eq!(overview, "1090865  high  left-pad@<1.0.0");
+        assert!(!overview.contains("prod"));
+        assert!(!overview.contains("dev-only"));
+
+        let hit = format_hit_line(&sample_advisory("1090865", Severity::High));
+        assert_eq!(hit, "high: left-pad@<1.3.0");
+        assert!(!hit.contains("prod"));
+        assert!(!hit.contains("dev-only"));
+
+        let resolution = format_resolution_line("lodash@^4", "4.17.21");
+        assert!(!resolution.contains("prod"));
+        assert!(!resolution.contains("dev-only"));
+    }
+
+    #[test]
+    fn unresolved_lines_use_advisory_id_for_environment_label() {
+        let mut production = HashSet::new();
+        production.insert("prod-id".into());
+        let prod_issue = UnresolvedIssue {
+            module_name: "lodash".into(),
+            request: "^4".into(),
+            advisory_id: "prod-id".into(),
+        };
+        let dev_issue = UnresolvedIssue {
+            module_name: "eslint".into(),
+            request: "^8".into(),
+            advisory_id: "dev-id".into(),
+        };
+        let prod_line = format_unresolved_issue_line(
+            &prod_issue.module_name,
+            &prod_issue.request,
+            DependencyEnvironment::classify(&prod_issue.advisory_id, &production),
+        );
+        let dev_line = format_unresolved_issue_line(
+            &dev_issue.module_name,
+            &dev_issue.request,
+            DependencyEnvironment::classify(&dev_issue.advisory_id, &production),
+        );
+        assert_eq!(prod_line, "\"lodash@^4\"  prod");
+        assert_eq!(dev_line, "\"eslint@^8\"  dev-only");
     }
 
     #[test]

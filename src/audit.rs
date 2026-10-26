@@ -1,9 +1,34 @@
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 use nodejs_semver::{Range, Version};
 use serde::Deserialize;
 
 use crate::{Package, parse};
+
+/// Whether an advisory is reachable via production dependencies or only via:devDependencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DependencyEnvironment {
+    Prod,
+    DevOnly,
+}
+
+impl DependencyEnvironment {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Prod => "prod",
+            Self::DevOnly => "dev-only",
+        }
+    }
+
+    /// `prod` when `id` is in the production-environment audit ID set; otherwise `dev-only`.
+    pub fn classify(id: &str, production_ids: &HashSet<String>) -> Self {
+        if production_ids.contains(id) {
+            Self::Prod
+        } else {
+            Self::DevOnly
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct AuditDto {
@@ -241,6 +266,33 @@ mod tests {
         assert_eq!(
             normalize_advisory_id(&serde_json::json!(1090865)),
             "1090865"
+        );
+    }
+
+    #[test]
+    fn classify_prod_when_id_in_production_set() {
+        let mut production = HashSet::new();
+        production.insert("1090865".into());
+        assert_eq!(
+            DependencyEnvironment::classify("1090865", &production),
+            DependencyEnvironment::Prod
+        );
+        assert_eq!(
+            DependencyEnvironment::classify("1090865", &production).label(),
+            "prod"
+        );
+    }
+
+    #[test]
+    fn classify_dev_only_when_id_absent_from_production_set() {
+        let production = HashSet::new();
+        assert_eq!(
+            DependencyEnvironment::classify("999", &production),
+            DependencyEnvironment::DevOnly
+        );
+        assert_eq!(
+            DependencyEnvironment::classify("999", &production).label(),
+            "dev-only"
         );
     }
 }

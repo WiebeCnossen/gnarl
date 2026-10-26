@@ -5,7 +5,10 @@ mod mode;
 mod stdout;
 pub mod tui;
 
-pub use format::{format_ignore_yaml, format_resolution_line, format_section_lines};
+pub use format::{
+    format_ignore_enrichment_line, format_ignore_yaml, format_resolution_line,
+    format_section_lines, format_unresolved_issue_line,
+};
 pub use mode::{UiMode, select_ui_mode};
 pub use stdout::StdoutReporter;
 

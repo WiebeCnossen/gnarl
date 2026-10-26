@@ -12,9 +12,20 @@ use crate::{
 };
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     path::PathBuf,
     process::{Command, Output},
 };
+
+/// CLI args for `yarn npm audit` JSON recursive runs.
+/// When `production` is true, adds `--environment production`.
+pub(crate) fn audit_cli_args(production: bool) -> Vec<&'static str> {
+    let mut args = vec!["npm", "audit", "--json", "--recursive"];
+    if production {
+        args.extend_from_slice(&["--environment", "production"]);
+    }
+    args
+}
 
 const AIKIDO_YARN_NAME: &str = "aikido-yarn";
 const SAFE_CHAIN_NAME: &str = "safe-chain";
@@ -162,7 +173,20 @@ impl Yarn {
     fn run_audit(&self) -> Result<Output, Error> {
         // Fetch all severities; gnarl applies `-s` / `--severity` itself so ignore hygiene can see
         // below-threshold advisories and not treat them as orphans.
-        self.run(false, &["npm", "audit", "--json", "--recursive"])
+        self.run(false, &audit_cli_args(false))
+    }
+
+    fn run_audit_production(&self) -> Result<Output, Error> {
+        self.run(false, &audit_cli_args(true))
+    }
+
+    /// Advisory IDs from a recursive production-environment audit (Yarn `--environment production`).
+    pub fn audit_production_ids(&self) -> Result<HashSet<String>, Error> {
+        let advisories = self.parse_audit(self.run_audit_production()?)?;
+        Ok(advisories
+            .into_iter()
+            .map(|advisory| advisory.id().to_owned())
+            .collect())
     }
 
     fn parse_audit(&self, output: Output) -> Result<Vec<Advisory>, Error> {
@@ -325,4 +349,32 @@ fn is_capped(range: &Range, cap: &Range) -> Ordering {
     }
 
     Ordering::Equal
+}
+
+#[cfg(test)]
+mod tests {
+    use super::audit_cli_args;
+
+    #[test]
+    fn audit_cli_args_default_omits_environment() {
+        assert_eq!(
+            audit_cli_args(false),
+            vec!["npm", "audit", "--json", "--recursive"]
+        );
+    }
+
+    #[test]
+    fn audit_cli_args_production_includes_environment() {
+        assert_eq!(
+            audit_cli_args(true),
+            vec![
+                "npm",
+                "audit",
+                "--json",
+                "--recursive",
+                "--environment",
+                "production"
+            ]
+        );
+    }
 }
