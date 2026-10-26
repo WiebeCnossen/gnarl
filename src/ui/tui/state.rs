@@ -24,7 +24,13 @@ impl PaneId {
             PaneId::Activity => " ACTIVITY ".into(),
             PaneId::Fixed => format!(" FIXED ({}) ", state.fixes.len()),
             PaneId::State => " INSIGHTS ".into(),
-            PaneId::Next => format!(" TASKS ({}) ", state.suggested_ignores.len()),
+            PaneId::Next => {
+                if state.report_ready {
+                    format!(" TASKS ({}) ", state.suggested_ignores.len())
+                } else {
+                    " TASKS ".into()
+                }
+            }
         }
     }
 
@@ -431,6 +437,19 @@ mod tests {
         assert_eq!(state.fixes, vec!["reset lodash".to_string()]);
         assert!(!state.activity.is_empty());
         assert!(state.state_lines()[0].contains("waiting"));
+    }
+
+    #[test]
+    fn tasks_title_omits_count_until_report_ready() {
+        let mut state = UiState::new(Verb::Auto);
+        assert!(!state.report_ready);
+        assert_eq!(PaneId::Next.title(&state), " TASKS ");
+        state.apply(UiEvent::Section {
+            title: "suggested ignores".into(),
+            lines: vec!["ignore 1".into()],
+        });
+        assert!(state.report_ready);
+        assert_eq!(PaneId::Next.title(&state), " TASKS (1) ");
     }
 
     #[test]
